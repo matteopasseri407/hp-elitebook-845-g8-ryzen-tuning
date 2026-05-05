@@ -2,7 +2,9 @@
 
 Thermal and power profiles for the HP EliteBook 845 G8 with the AMD Ryzen 7 PRO 5850U.
 
-The goal is not to hard-cap the CPU. The profiles keep boost enabled and leave the maximum CPU frequency uncapped, then tune the sustained SMU power limits and the AMD P-State energy preference so the laptop can still burst hard without sitting at the stock 100 C thermal edge during sustained workloads.
+The goal is not to hard-cap the CPU. The profiles keep boost enabled and leave the maximum CPU frequency uncapped for normal work, then tune the sustained SMU power limits and the AMD P-State energy preference so the laptop can still burst hard without sitting at the stock 100 C thermal edge during sustained workloads.
+
+Idle efficiency is handled separately by a staged idle overlay. The overlay leaves the selected profile intact, moves to a soft idle hint after a few quiet seconds, and only enters a deeper capped state after sustained quiet. Any real CPU load clears the overlay and restores the active profile.
 
 Tested on:
 
@@ -18,7 +20,8 @@ This is intentionally hardware-scoped. The main script refuses to run on unrecog
 
 | Profile | Use case | Boost | CPU max freq | EPP | Fast limit | Sustained CPU/APU | Tctl |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `ac` | Plugged in daily work | on | uncapped | `balance_performance` | 30 W | 18 W | 90 C |
+| `ac` | Plugged in daily work | on | uncapped | `balance_power` | 30 W | 18 W | 90 C |
+| `performance` | Manual plugged-in performance | on | uncapped | `balance_performance` | 30 W | 18 W | 90 C |
 | `battery` | Unplugged work | on | uncapped | `balance_power` | 30 W | 15 W | 88 C |
 | `battery-saver` | Automatic low-battery guard | off | 1.8 GHz | `power` | 15 W | 8 W | 80 C |
 | `gaming` | Steam game process detected | on | uncapped | `balance_performance` | 30 W | 23 W | 92 C |
@@ -32,10 +35,11 @@ There is no `stock` profile. On the tested unit, the stock firmware/SMU behavior
 - systemd oneshot service: reapplies `auto` at boot
 - udev rules: reapply `auto` when AC power or battery state changes
 - system sleep hook: reapplies `auto` after resume
+- idle overlay watcher: applies soft/deep idle hints with near-zero polling overhead
 - Steam game watcher: switches to `gaming` only while a real Steam game process is detected
 - optional GNOME Shell panel indicator: white bolt/controller/leaf/cool icons with a profile switcher
 
-The Steam watcher is designed to be low impact. It scans `/proc`, uses long idle intervals, and the systemd unit constrains it with low scheduling priority, `CPUQuota=2%`, and `MemoryMax=64M`.
+The idle watcher is intentionally cheap. It samples aggregate `/proc/stat` and `/proc/loadavg` once per second, does not scan processes, and calls RyzenAdj only when entering or leaving deep idle. The Steam watcher scans `/proc` only on long intervals and is constrained with low scheduling priority, `CPUQuota=2%`, and `MemoryMax=64M`.
 
 ## Requirements
 
@@ -60,6 +64,12 @@ To skip the Steam game watcher:
 sudo ./scripts/install-fedora.sh --without-steam-watcher
 ```
 
+To skip the idle overlay watcher:
+
+```bash
+sudo ./scripts/install-fedora.sh --without-idle-watcher
+```
+
 Optional GNOME Shell indicator:
 
 ```bash
@@ -79,6 +89,7 @@ On Wayland, a logout/login may be needed after installing a local extension.
 ```bash
 sudo elitebook-thermal-profile auto
 sudo elitebook-thermal-profile ac
+sudo elitebook-thermal-profile performance
 sudo elitebook-thermal-profile battery
 sudo elitebook-thermal-profile battery-saver
 sudo elitebook-thermal-profile gaming
@@ -95,6 +106,7 @@ Current state is exposed at:
 
 ```bash
 cat /run/elitebook-thermal-profile/current
+cat /run/elitebook-thermal-profile/idle-watcher
 ```
 
 ## Uninstall

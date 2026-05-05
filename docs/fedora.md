@@ -30,6 +30,12 @@ Without the Steam game watcher:
 sudo ./scripts/install-fedora.sh --without-steam-watcher
 ```
 
+Without the idle overlay watcher:
+
+```bash
+sudo ./scripts/install-fedora.sh --without-idle-watcher
+```
+
 With the GNOME Shell indicator:
 
 ```bash
@@ -43,9 +49,13 @@ Log out and back in if GNOME Shell does not load the extension immediately.
 
 ```bash
 systemctl status elitebook-thermal-profile.service
+systemctl status elitebook-idle-watcher.service
 systemctl status elitebook-steam-game-watcher.service
 cat /run/elitebook-thermal-profile/current
+cat /run/elitebook-thermal-profile/idle-watcher
 ```
+
+The idle watcher is a staged overlay, not a profile replacement. Soft idle starts after a few quiet seconds with low-power EPP and no frequency cap. Deep idle starts only after longer quiet, then disables boost and uses a temporary low max frequency. Any real CPU load restores the current `ac`, `battery`, `gaming`, or manual profile.
 
 ## AC/Battery Automation
 

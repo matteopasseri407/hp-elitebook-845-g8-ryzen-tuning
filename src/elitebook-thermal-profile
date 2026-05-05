@@ -7,7 +7,7 @@ STATE_FILE="$STATE_DIR/current"
 
 usage() {
   cat >&2 <<'EOF'
-Usage: elitebook-thermal-profile [auto|ac|battery|battery-saver|gaming|cool|--check-hardware]
+Usage: elitebook-thermal-profile [auto|ac|performance|battery|battery-saver|gaming|cool|--check-hardware]
 
 Environment:
   RYZENADJ=/path/to/ryzenadj
@@ -229,6 +229,14 @@ tuned_profile=balanced
 
 case "$profile" in
   ac)
+    epp="balance_power"
+    stapm=22000
+    fast=30000
+    slow=18000
+    apu=18000
+    tctl=90
+    ;;
+  performance)
     epp="balance_performance"
     stapm=22000
     fast=30000

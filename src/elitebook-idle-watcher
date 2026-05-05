@@ -1,0 +1,374 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+import os
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+STATE_DIR = Path(os.environ.get("ELITEBOOK_THERMAL_STATE_DIR", "/run/elitebook-thermal-profile"))
+PROFILE_STATE = STATE_DIR / "current"
+IDLE_STATE = STATE_DIR / "idle-watcher"
+
+SAMPLE_INTERVAL = float(os.environ.get("ELITEBOOK_IDLE_SAMPLE_INTERVAL", "1"))
+SOFT_ENTER_SAMPLES = int(os.environ.get("ELITEBOOK_IDLE_SOFT_ENTER_SAMPLES", "3"))
+DEEP_ENTER_SAMPLES = int(os.environ.get("ELITEBOOK_IDLE_DEEP_ENTER_SAMPLES", "30"))
+ENTER_BUSY_PERCENT = float(os.environ.get("ELITEBOOK_IDLE_ENTER_BUSY_PERCENT", "4.0"))
+EXIT_BUSY_PERCENT = float(os.environ.get("ELITEBOOK_IDLE_EXIT_BUSY_PERCENT", "6.0"))
+ENTER_LOAD1 = float(os.environ.get("ELITEBOOK_IDLE_ENTER_LOAD1", "1.2"))
+EXIT_LOAD1 = float(os.environ.get("ELITEBOOK_IDLE_EXIT_LOAD1", "1.6"))
+
+SOFT_IDLE_EPP = os.environ.get("ELITEBOOK_SOFT_IDLE_EPP", "balance_power")
+SOFT_IDLE_DISABLE_BOOST = os.environ.get("ELITEBOOK_SOFT_IDLE_DISABLE_BOOST", "0").lower() not in {
+    "0",
+    "false",
+    "no",
+    "off",
+}
+SOFT_IDLE_MAX_FREQ_KHZ = os.environ.get("ELITEBOOK_SOFT_IDLE_MAX_FREQ_KHZ", "uncapped")
+SOFT_IDLE_APPLY_RYZENADJ = os.environ.get("ELITEBOOK_SOFT_IDLE_APPLY_RYZENADJ", "0").lower() not in {
+    "0",
+    "false",
+    "no",
+    "off",
+}
+
+DEEP_IDLE_EPP = os.environ.get("ELITEBOOK_DEEP_IDLE_EPP", "power")
+DEEP_IDLE_DISABLE_BOOST = os.environ.get("ELITEBOOK_DEEP_IDLE_DISABLE_BOOST", "1").lower() not in {
+    "0",
+    "false",
+    "no",
+    "off",
+}
+DEEP_IDLE_MAX_FREQ_KHZ = os.environ.get("ELITEBOOK_DEEP_IDLE_MAX_FREQ_KHZ", "1800000")
+DEEP_IDLE_STAPM_MW = os.environ.get("ELITEBOOK_DEEP_IDLE_STAPM_MW", "10000")
+DEEP_IDLE_FAST_MW = os.environ.get("ELITEBOOK_DEEP_IDLE_FAST_MW", "12000")
+DEEP_IDLE_SLOW_MW = os.environ.get("ELITEBOOK_DEEP_IDLE_SLOW_MW", "6000")
+DEEP_IDLE_APU_MW = os.environ.get("ELITEBOOK_DEEP_IDLE_APU_MW", "6000")
+DEEP_IDLE_TCTL_C = os.environ.get("ELITEBOOK_DEEP_IDLE_TCTL_C", "75")
+DEEP_IDLE_APPLY_RYZENADJ = os.environ.get("ELITEBOOK_DEEP_IDLE_APPLY_RYZENADJ", "1").lower() not in {
+    "0",
+    "false",
+    "no",
+    "off",
+}
+
+
+def read_key_value_file(path: Path) -> dict[str, str]:
+    state: dict[str, str] = {}
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if "=" in line:
+                key, value = line.split("=", 1)
+                state[key] = value
+    except OSError:
+        pass
+    return state
+
+
+def read_profile_state() -> dict[str, str]:
+    return read_key_value_file(PROFILE_STATE)
+
+
+def read_idle_state() -> dict[str, str]:
+    return read_key_value_file(IDLE_STATE)
+
+
+def idle_active() -> bool:
+    return read_idle_state().get("active") == "1"
+
+
+def write_idle_state(base_state: dict[str, str], stage: str, values: dict[str, str], busy_percent: float, load1: float) -> None:
+    STATE_DIR.mkdir(mode=0o755, exist_ok=True)
+    lines = [
+        "active=1",
+        f"stage={stage}",
+        f"base_profile={base_state.get('profile', 'unknown')}",
+        f"base_source={base_state.get('source', 'unknown')}",
+        f"base_updated={base_state.get('updated', 'unknown')}",
+        f"busy_percent={busy_percent:.2f}",
+        f"load1={load1:.2f}",
+        f"epp={values['epp']}",
+        f"boost={values['boost']}",
+        f"max_freq={values['max_freq']}",
+        f"stapm_mw={values['stapm']}",
+        f"fast_mw={values['fast']}",
+        f"slow_mw={values['slow']}",
+        f"apu_mw={values['apu']}",
+        f"tctl_c={values['tctl']}",
+        f"updated={time.strftime('%Y-%m-%dT%H:%M:%S%z')}",
+        "",
+    ]
+    IDLE_STATE.write_text("\n".join(lines), encoding="utf-8")
+    IDLE_STATE.chmod(0o644)
+
+
+def clear_idle_state() -> None:
+    try:
+        IDLE_STATE.unlink()
+    except FileNotFoundError:
+        pass
+
+
+def cpu_sample() -> tuple[int, int]:
+    first = Path("/proc/stat").read_text(encoding="utf-8").splitlines()[0].split()[1:]
+    values = [int(value) for value in first]
+    idle = values[3] + values[4]
+    total = sum(values)
+    return total, idle
+
+
+def cpu_busy_percent(previous: tuple[int, int], current: tuple[int, int]) -> float:
+    total_delta = current[0] - previous[0]
+    idle_delta = current[1] - previous[1]
+    if total_delta <= 0:
+        return 0.0
+    return max(0.0, min(100.0, 100.0 * (total_delta - idle_delta) / total_delta))
+
+
+def load1() -> float:
+    try:
+        return float(Path("/proc/loadavg").read_text(encoding="utf-8").split()[0])
+    except (OSError, ValueError, IndexError):
+        return 0.0
+
+
+def write_sysfs(path: Path, value: str) -> None:
+    try:
+        path.write_text(value, encoding="utf-8")
+    except OSError:
+        pass
+
+
+def set_cpu_policy(epp: str, boost: str, max_freq: str) -> None:
+    boost_path = Path("/sys/devices/system/cpu/cpufreq/boost")
+    if boost_path.exists():
+        write_sysfs(boost_path, "1\n" if boost == "on" else "0\n")
+
+    for policy in sorted(Path("/sys/devices/system/cpu/cpufreq").glob("policy*")):
+        epp_path = policy / "energy_performance_preference"
+        if epp_path.exists():
+            write_sysfs(epp_path, f"{epp}\n")
+
+        max_path = policy / "scaling_max_freq"
+        if not max_path.exists():
+            continue
+
+        if max_freq == "uncapped":
+            cpuinfo_max = policy / "cpuinfo_max_freq"
+            try:
+                max_freq_value = cpuinfo_max.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            write_sysfs(max_path, max_freq_value)
+        else:
+            write_sysfs(max_path, f"{max_freq}\n")
+
+
+def find_ryzenadj() -> Path | None:
+    configured = os.environ.get("RYZENADJ")
+    if configured:
+        path = Path(configured)
+        return path if path.exists() and os.access(path, os.X_OK) else None
+
+    for candidate in (
+        Path("/usr/local/sbin/ryzenadj"),
+        Path("/usr/local/bin/ryzenadj"),
+        Path("/usr/bin/ryzenadj"),
+    ):
+        if candidate.exists() and os.access(candidate, os.X_OK):
+            return candidate
+
+    return None
+
+
+def apply_ryzen_limits(stapm: str, fast: str, slow: str, apu: str, tctl: str, enabled: bool = True) -> None:
+    if not enabled:
+        return
+
+    ryzenadj = find_ryzenadj()
+    if ryzenadj is None:
+        return
+
+    subprocess.run(
+        [
+            str(ryzenadj),
+            f"--stapm-limit={stapm}",
+            f"--fast-limit={fast}",
+            f"--slow-limit={slow}",
+            f"--apu-slow-limit={apu}",
+            f"--tctl-temp={tctl}",
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+
+
+def profile_state_is_complete(state: dict[str, str]) -> bool:
+    required = {"profile", "epp", "stapm_mw", "fast_mw", "slow_mw", "apu_mw", "tctl_c", "boost", "max_freq"}
+    return required.issubset(state.keys())
+
+
+def overlay_values(base_state: dict[str, str], stage: str) -> tuple[dict[str, str], bool]:
+    if stage == "soft":
+        boost = "off" if SOFT_IDLE_DISABLE_BOOST else base_state.get("boost", "on")
+        values = {
+            "epp": SOFT_IDLE_EPP,
+            "boost": boost,
+            "max_freq": SOFT_IDLE_MAX_FREQ_KHZ,
+            "stapm": base_state.get("stapm_mw", "18000"),
+            "fast": base_state.get("fast_mw", "30000"),
+            "slow": base_state.get("slow_mw", "15000"),
+            "apu": base_state.get("apu_mw", "15000"),
+            "tctl": base_state.get("tctl_c", "88"),
+        }
+        return values, SOFT_IDLE_APPLY_RYZENADJ
+
+    if stage == "deep":
+        boost = "off" if DEEP_IDLE_DISABLE_BOOST else base_state.get("boost", "on")
+        values = {
+            "epp": DEEP_IDLE_EPP,
+            "boost": boost,
+            "max_freq": DEEP_IDLE_MAX_FREQ_KHZ,
+            "stapm": DEEP_IDLE_STAPM_MW,
+            "fast": DEEP_IDLE_FAST_MW,
+            "slow": DEEP_IDLE_SLOW_MW,
+            "apu": DEEP_IDLE_APU_MW,
+            "tctl": DEEP_IDLE_TCTL_C,
+        }
+        return values, DEEP_IDLE_APPLY_RYZENADJ
+
+    raise ValueError(f"unknown idle stage: {stage}")
+
+
+def apply_idle_overlay(
+    base_state: dict[str, str],
+    stage: str = "deep",
+    busy_percent: float = 0.0,
+    current_load1: float = 0.0,
+) -> bool:
+    if not profile_state_is_complete(base_state):
+        return False
+
+    values, apply_ryzenadj = overlay_values(base_state, stage)
+    set_cpu_policy(values["epp"], values["boost"], values["max_freq"])
+    apply_ryzen_limits(
+        values["stapm"],
+        values["fast"],
+        values["slow"],
+        values["apu"],
+        values["tctl"],
+        apply_ryzenadj,
+    )
+    write_idle_state(base_state, stage, values, busy_percent, current_load1)
+    print(
+        f"EliteBook {stage} idle overlay active: "
+        f"EPP {values['epp']}, boost {values['boost']}, max freq {values['max_freq']}, "
+        f"FAST {values['fast']}mW, SLOW/APU {values['slow']}mW, Tctl {values['tctl']}C.",
+        flush=True,
+    )
+    return True
+
+
+def restore_base_profile(base_state: dict[str, str]) -> bool:
+    if not profile_state_is_complete(base_state):
+        return False
+
+    set_cpu_policy(
+        base_state.get("epp", "balance_power"),
+        base_state.get("boost", "on"),
+        base_state.get("max_freq", "uncapped"),
+    )
+    apply_ryzen_limits(
+        base_state.get("stapm_mw", "18000"),
+        base_state.get("fast_mw", "30000"),
+        base_state.get("slow_mw", "15000"),
+        base_state.get("apu_mw", "15000"),
+        base_state.get("tctl_c", "88"),
+    )
+    clear_idle_state()
+    print(
+        "EliteBook idle overlay cleared: restored "
+        f"{base_state.get('profile', 'unknown')} profile.",
+        flush=True,
+    )
+    return True
+
+
+def check_once(previous: tuple[int, int], idle_count: int) -> tuple[tuple[int, int], int]:
+    time.sleep(SAMPLE_INTERVAL)
+    current = cpu_sample()
+    busy = cpu_busy_percent(previous, current)
+    current_load1 = load1()
+    state = read_profile_state()
+    current_idle_state = read_idle_state()
+    active = current_idle_state.get("active") == "1"
+    stage = current_idle_state.get("stage", "")
+
+    should_exit = busy >= EXIT_BUSY_PERCENT or current_load1 >= EXIT_LOAD1
+    should_enter = busy <= ENTER_BUSY_PERCENT and current_load1 <= ENTER_LOAD1
+
+    if active:
+        if should_exit:
+            restore_base_profile(state)
+            return current, 0
+
+        if should_enter:
+            idle_count = min(idle_count + 1, DEEP_ENTER_SAMPLES)
+        else:
+            idle_count = 0
+
+        if current_idle_state.get("base_updated") != state.get("updated"):
+            apply_idle_overlay(state, stage or "soft", busy, current_load1)
+
+        if stage != "deep" and idle_count >= DEEP_ENTER_SAMPLES:
+            apply_idle_overlay(state, "deep", busy, current_load1)
+
+        return current, idle_count
+
+    if should_enter:
+        idle_count += 1
+    else:
+        idle_count = 0
+
+    if idle_count >= SOFT_ENTER_SAMPLES:
+        apply_idle_overlay(state, "soft", busy, current_load1)
+        idle_count = min(idle_count, DEEP_ENTER_SAMPLES)
+
+    return current, idle_count
+
+
+def print_status() -> None:
+    state = read_idle_state()
+    if state.get("active") == "1":
+        for key, value in state.items():
+            print(f"{key}={value}")
+    else:
+        print("active=0")
+
+
+def main() -> int:
+    mode = sys.argv[1] if len(sys.argv) > 1 else "watch"
+
+    if mode == "status":
+        print_status()
+        return 0
+    if mode == "apply-idle":
+        return 0 if apply_idle_overlay(read_profile_state(), "deep", 0.0, load1()) else 1
+    if mode == "apply-soft":
+        return 0 if apply_idle_overlay(read_profile_state(), "soft", 0.0, load1()) else 1
+    if mode == "restore":
+        return 0 if restore_base_profile(read_profile_state()) else 1
+    if mode != "watch":
+        print(f"Usage: {Path(sys.argv[0]).name} [watch|status|apply-soft|apply-idle|restore]", file=sys.stderr)
+        return 2
+
+    previous = cpu_sample()
+    idle_count = 0
+    while True:
+        previous, idle_count = check_once(previous, idle_count)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

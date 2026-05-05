@@ -6,11 +6,12 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 WITH_GNOME_EXTENSION=0
 ENABLE_STEAM_WATCHER=1
+ENABLE_IDLE_WATCHER=1
 EXTENSION_UUID="elitebook-thermal-profile@matteopasseri.github.io"
 
 usage() {
   cat >&2 <<'EOF'
-Usage: sudo ./scripts/install-fedora.sh [--with-gnome-extension] [--without-steam-watcher]
+Usage: sudo ./scripts/install-fedora.sh [--with-gnome-extension] [--without-steam-watcher] [--without-idle-watcher]
 
 Installs:
   /usr/local/sbin/elitebook-thermal-profile
@@ -18,8 +19,9 @@ Installs:
   /etc/udev/rules.d/90-elitebook-thermal-profile.rules
   /etc/systemd/system-sleep/elitebook-thermal-profile
   low-battery battery-saver automation at 20%
+  low-power idle overlay watcher
 
-By default it also installs and enables the Steam game watcher.
+By default it also installs and enables the idle overlay watcher and Steam game watcher.
 EOF
 }
 
@@ -31,6 +33,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --without-steam-watcher)
       ENABLE_STEAM_WATCHER=0
+      shift
+      ;;
+    --without-idle-watcher)
+      ENABLE_IDLE_WATCHER=0
       shift
       ;;
     -h|--help)
@@ -69,6 +75,16 @@ install -D -m 0755 "$REPO_DIR/src/elitebook-thermal-profile" /usr/local/sbin/eli
 install -D -m 0644 "$REPO_DIR/systemd/elitebook-thermal-profile.service" /etc/systemd/system/elitebook-thermal-profile.service
 install -D -m 0644 "$REPO_DIR/udev/90-elitebook-thermal-profile.rules" /etc/udev/rules.d/90-elitebook-thermal-profile.rules
 install -D -m 0755 "$REPO_DIR/system-sleep/elitebook-thermal-profile" /etc/systemd/system-sleep/elitebook-thermal-profile
+
+if [[ "$ENABLE_IDLE_WATCHER" -eq 1 ]]; then
+  install -D -m 0755 "$REPO_DIR/src/elitebook-idle-watcher" /usr/local/sbin/elitebook-idle-watcher
+  install -D -m 0644 "$REPO_DIR/systemd/elitebook-idle-watcher.service" /etc/systemd/system/elitebook-idle-watcher.service
+else
+  systemctl disable --now elitebook-idle-watcher.service >/dev/null 2>&1 || true
+  rm -f /etc/systemd/system/elitebook-idle-watcher.service
+  rm -f /usr/local/sbin/elitebook-idle-watcher
+  rm -f /run/elitebook-thermal-profile/idle-watcher
+fi
 
 if [[ "$ENABLE_STEAM_WATCHER" -eq 1 ]]; then
   install -D -m 0755 "$REPO_DIR/src/elitebook-steam-game-watcher" /usr/local/sbin/elitebook-steam-game-watcher
@@ -112,10 +128,17 @@ fi
 
 systemctl daemon-reload
 udevadm control --reload-rules
-systemctl enable --now elitebook-thermal-profile.service
+systemctl enable elitebook-thermal-profile.service
+systemctl restart elitebook-thermal-profile.service
+
+if [[ "$ENABLE_IDLE_WATCHER" -eq 1 ]]; then
+  systemctl enable elitebook-idle-watcher.service
+  systemctl restart elitebook-idle-watcher.service
+fi
 
 if [[ "$ENABLE_STEAM_WATCHER" -eq 1 ]]; then
-  systemctl enable --now elitebook-steam-game-watcher.service
+  systemctl enable elitebook-steam-game-watcher.service
+  systemctl restart elitebook-steam-game-watcher.service
 fi
 
 echo "Installed HP EliteBook 845 G8 Ryzen thermal profiles."
@@ -129,4 +152,8 @@ fi
 
 if [[ "$ENABLE_STEAM_WATCHER" -ne 1 ]]; then
   echo "Steam game watcher skipped."
+fi
+
+if [[ "$ENABLE_IDLE_WATCHER" -ne 1 ]]; then
+  echo "Idle overlay watcher skipped."
 fi

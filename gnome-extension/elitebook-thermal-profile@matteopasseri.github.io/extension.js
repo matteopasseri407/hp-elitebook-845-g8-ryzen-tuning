@@ -12,10 +12,16 @@ import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 
 const PROFILE_SCRIPT = '/usr/local/sbin/elitebook-thermal-profile';
 const STATE_FILE = '/run/elitebook-thermal-profile/current';
+const IDLE_STATE_FILE = '/run/elitebook-thermal-profile/idle-watcher';
 
 const PROFILES = {
     ac: {
-        label: 'Fast',
+        label: 'AC',
+        icon: 'bolt-symbolic.svg',
+        detail: '30 W burst, 18 W sustained, efficient EPP',
+    },
+    performance: {
+        label: 'Perf',
         icon: 'bolt-symbolic.svg',
         detail: '30 W burst, 18 W sustained, 90 C',
     },
@@ -73,7 +79,7 @@ class ThermalIndicator extends PanelMenu.Button {
     }
 
     _buildMenu() {
-        for (const profile of ['ac', 'gaming', 'battery', 'battery-saver', 'cool']) {
+        for (const profile of ['ac', 'performance', 'gaming', 'battery', 'battery-saver', 'cool']) {
             const data = PROFILES[profile];
             const item = new PopupMenu.PopupImageMenuItem(
                 data.label,
@@ -107,9 +113,9 @@ class ThermalIndicator extends PanelMenu.Button {
         return Gio.FileIcon.new(Gio.File.new_for_path(path));
     }
 
-    _readState() {
+    _readKeyValueFile(path) {
         try {
-            const [ok, bytes] = GLib.file_get_contents(STATE_FILE);
+            const [ok, bytes] = GLib.file_get_contents(path);
             if (!ok)
                 return null;
 
@@ -125,9 +131,19 @@ class ThermalIndicator extends PanelMenu.Button {
         }
     }
 
+    _readState() {
+        return this._readKeyValueFile(STATE_FILE);
+    }
+
+    _readIdleState() {
+        return this._readKeyValueFile(IDLE_STATE_FILE);
+    }
+
     _refresh() {
         const state = this._readState();
+        const idleState = this._readIdleState();
         const profile = state?.profile in PROFILES ? state.profile : 'ac';
+        const idleActive = idleState?.active === '1';
         this._profile = profile;
         this._icon.gicon = this._iconFor(profile);
 
@@ -138,8 +154,14 @@ class ThermalIndicator extends PanelMenu.Button {
         }
 
         const data = PROFILES[profile];
-        this._statusItem.label.text = `${data.label}: ${data.detail}`;
-        this.accessible_name = `EliteBook thermal profile: ${data.label}`;
+        if (idleActive) {
+            const stage = idleState.stage === 'deep' ? 'deep idle' : 'soft idle';
+            this._statusItem.label.text = `${data.label}: ${stage}, ${idleState.epp ?? 'power'} EPP`;
+            this.accessible_name = `EliteBook thermal profile: ${data.label}, ${stage}`;
+        } else {
+            this._statusItem.label.text = `${data.label}: ${data.detail}`;
+            this.accessible_name = `EliteBook thermal profile: ${data.label}`;
+        }
     }
 
     _applyProfile(profile) {

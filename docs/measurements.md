@@ -39,11 +39,14 @@ The current profiles keep:
 
 They reduce the sustained CPU/APU envelope instead. This keeps the machine closer to the cooling system's real capacity while preserving short boost behavior.
 
+Idle behavior is handled as a separate staged overlay instead of baking deep caps into every profile. Soft idle only changes the EPP hint after a few quiet seconds. Deep idle is delayed and then applies the more aggressive boost/frequency/SMU limits. The watcher exits idle on the first active sample, so foreground work should restore the selected profile quickly.
+
 ## Profile Notes
 
 | Profile | Observed intent |
 | --- | --- |
-| `ac` | Main plugged-in work profile. Keeps burst response but targets a lower sustained thermal ceiling than stock. |
+| `ac` | Main plugged-in work profile. Keeps burst response, uses a calmer EPP hint than the original fast profile, and targets a lower sustained thermal ceiling than stock. |
+| `performance` | Manual plugged-in profile that keeps the original responsive AC EPP without the gaming power envelope. |
 | `battery` | Keeps performance available on battery but shifts EPP and sustained power for better idle/light-load efficiency. |
 | `battery-saver` | Automatic low-battery guard. Drops sustained power sharply, disables boost, and caps frequency so forgotten workloads drain the last battery segment more slowly. |
 | `gaming` | Gives the APU more sustained room for Steam games while keeping a lower temperature target than stock. |
@@ -59,14 +62,24 @@ That incident is why `battery-saver` exists and why the udev rules listen for ba
 
 ## Watcher Overhead
 
-The Steam watcher is intentionally simple:
+The idle watcher is intentionally cheaper than a process monitor:
+
+- 1 second sample interval
+- reads only aggregate `/proc/stat` and `/proc/loadavg`
+- no per-process scan in the idle loop
+- no RyzenAdj call during polling; RyzenAdj is called only on deep-idle enter/exit transitions
+- systemd constraints: `Nice=10`, `IOSchedulingClass=idle`, `CPUQuota=2%`, `MemoryMax=64M`
+
+On the original Fedora test system, the idle watcher used about 48 ms CPU over 60 seconds and about 7.3 MB RAM. During deep idle with background desktop processes still present, the observed APU/PPT sensor dropped to about 4 W and `k10temp` settled around 57-58 C.
+
+The Steam watcher remains separate and slow:
 
 - 60 second scan interval when plugged in and Steam is not running
 - 120 second scan interval on battery and Steam is not running
 - 20 second interval while Steam is running
 - systemd constraints: `Nice=10`, `IOSchedulingClass=idle`, `CPUQuota=2%`, `MemoryMax=64M`
 
-On the original tuned system, an idle watcher sample showed roughly 168 ms of CPU over about 65 seconds and around 6-7 MB resident memory. Treat this as an order-of-magnitude reference, not a guarantee across systems.
+On the original tuned system, the Steam watcher sample showed roughly 168 ms of CPU over about 65 seconds and around 6-7 MB resident memory. Treat this as an order-of-magnitude reference, not a guarantee across systems.
 
 ## What Would Make The Data Stronger
 

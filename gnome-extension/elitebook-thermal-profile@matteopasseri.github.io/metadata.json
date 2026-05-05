@@ -4,5 +4,5 @@
   "description": "Panel switcher for HP EliteBook Ryzen thermal profiles.",
   "url": "https://github.com/matteopasseri407/hp-elitebook-845-g8-ryzen-tuning",
   "shell-version": ["45", "46", "47", "48", "49", "50"],
-  "version": 2
+  "version": 3
 }

@@ -1,0 +1,38 @@
+[Unit]
+Description=Apply low-power idle overlay for EliteBook thermal profiles
+Documentation=https://github.com/matteopasseri407/hp-elitebook-845-g8-ryzen-tuning
+After=elitebook-thermal-profile.service
+Wants=elitebook-thermal-profile.service
+
+[Service]
+Type=simple
+Environment=ELITEBOOK_IDLE_SAMPLE_INTERVAL=1
+Environment=ELITEBOOK_IDLE_SOFT_ENTER_SAMPLES=3
+Environment=ELITEBOOK_IDLE_DEEP_ENTER_SAMPLES=30
+Environment=ELITEBOOK_IDLE_ENTER_BUSY_PERCENT=4.0
+Environment=ELITEBOOK_IDLE_EXIT_BUSY_PERCENT=6.0
+Environment=ELITEBOOK_IDLE_ENTER_LOAD1=1.2
+Environment=ELITEBOOK_IDLE_EXIT_LOAD1=1.6
+Environment=ELITEBOOK_SOFT_IDLE_EPP=balance_power
+Environment=ELITEBOOK_SOFT_IDLE_DISABLE_BOOST=0
+Environment=ELITEBOOK_SOFT_IDLE_MAX_FREQ_KHZ=uncapped
+Environment=ELITEBOOK_SOFT_IDLE_APPLY_RYZENADJ=0
+Environment=ELITEBOOK_DEEP_IDLE_EPP=power
+Environment=ELITEBOOK_DEEP_IDLE_DISABLE_BOOST=1
+Environment=ELITEBOOK_DEEP_IDLE_MAX_FREQ_KHZ=1800000
+Environment=ELITEBOOK_DEEP_IDLE_STAPM_MW=10000
+Environment=ELITEBOOK_DEEP_IDLE_FAST_MW=12000
+Environment=ELITEBOOK_DEEP_IDLE_SLOW_MW=6000
+Environment=ELITEBOOK_DEEP_IDLE_APU_MW=6000
+Environment=ELITEBOOK_DEEP_IDLE_TCTL_C=75
+ExecStart=/usr/local/sbin/elitebook-idle-watcher watch
+ExecStopPost=/usr/local/sbin/elitebook-idle-watcher restore
+Restart=on-failure
+RestartSec=5s
+Nice=10
+IOSchedulingClass=idle
+CPUQuota=2%
+MemoryMax=64M
+
+[Install]
+WantedBy=multi-user.target

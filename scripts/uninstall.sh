@@ -34,16 +34,20 @@ if [[ "${EUID}" -ne 0 ]]; then
 fi
 
 systemctl disable --now elitebook-steam-game-watcher.service >/dev/null 2>&1 || true
+systemctl disable --now elitebook-idle-watcher.service >/dev/null 2>&1 || true
 systemctl disable --now elitebook-thermal-profile.service >/dev/null 2>&1 || true
 
 rm -f /etc/systemd/system/elitebook-steam-game-watcher.service
+rm -f /etc/systemd/system/elitebook-idle-watcher.service
 rm -f /etc/systemd/system/elitebook-thermal-profile.service
 rm -f /etc/udev/rules.d/90-elitebook-thermal-profile.rules
 rm -f /etc/systemd/system-sleep/elitebook-thermal-profile
 rm -f /usr/local/sbin/elitebook-steam-game-watcher
+rm -f /usr/local/sbin/elitebook-idle-watcher
 rm -f /usr/local/sbin/elitebook-thermal-profile
 rm -f /run/elitebook-thermal-profile/current
 rm -f /run/elitebook-thermal-profile/steam-game-watcher
+rm -f /run/elitebook-thermal-profile/idle-watcher
 rmdir /run/elitebook-thermal-profile >/dev/null 2>&1 || true
 
 systemctl daemon-reload
