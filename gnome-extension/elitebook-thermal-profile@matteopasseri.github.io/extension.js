@@ -43,7 +43,7 @@ const PROFILES = {
     },
     cool: {
         label: 'Quiet',
-        icon: 'cool-symbolic.svg',
+        icon: 'leaf-symbolic.svg',
         detail: 'cooler manual override',
     },
 };
@@ -51,7 +51,7 @@ const PROFILES = {
 const ACTIONS = {
     auto: {
         label: 'Auto',
-        icon: 'auto-symbolic.svg',
+        icon: 'ai-symbolic.svg',
     },
     gaming: {
         label: 'Game',
@@ -59,7 +59,7 @@ const ACTIONS = {
     },
     cool: {
         label: 'Quiet',
-        icon: 'cool-symbolic.svg',
+        icon: 'leaf-symbolic.svg',
     },
 };
 
