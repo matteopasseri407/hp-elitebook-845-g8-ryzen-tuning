@@ -31,7 +31,7 @@ There is no `stock` profile. On the tested unit, the stock firmware/SMU behavior
 - systemd oneshot service: reapplies `auto` at boot
 - udev rule: reapplies `auto` when AC power changes
 - system sleep hook: reapplies `auto` after resume
-- optional Steam game watcher: switches to `gaming` only while a real Steam game process is detected
+- Steam game watcher: switches to `gaming` only while a real Steam game process is detected
 - optional GNOME Shell panel indicator: white bolt/controller/leaf/cool icons with a profile switcher
 
 The Steam watcher is designed to be low impact. It scans `/proc`, uses long idle intervals, and the systemd unit constrains it with low scheduling priority, `CPUQuota=2%`, and `MemoryMax=64M`.
@@ -51,6 +51,12 @@ This repository does not vendor RyzenAdj. Install it from your distribution, COP
 ```bash
 sudo dnf install tuned python3 polkit
 sudo ./scripts/install-fedora.sh
+```
+
+To skip the Steam game watcher:
+
+```bash
+sudo ./scripts/install-fedora.sh --without-steam-watcher
 ```
 
 Optional GNOME Shell indicator:
@@ -111,4 +117,3 @@ Read [docs/safety.md](docs/safety.md) before adapting it to other machines.
 - RPM spec cleanup for `/usr/libexec` and packaged systemd units
 - More test reports across BIOS versions
 - Optional install profiles for other Linux distributions
-

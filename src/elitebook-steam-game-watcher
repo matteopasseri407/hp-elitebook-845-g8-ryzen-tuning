@@ -202,7 +202,7 @@ def check_once() -> bool:
                     f"pid={game['pid']} comm={game['comm']}; applied gaming",
                     flush=True,
                 )
-        elif watcher_active():
+        elif source == "steam-game-watcher" or watcher_active():
             mark_active(game)
         return True
 

@@ -24,6 +24,12 @@ From the repository root:
 sudo ./scripts/install-fedora.sh
 ```
 
+Without the Steam game watcher:
+
+```bash
+sudo ./scripts/install-fedora.sh --without-steam-watcher
+```
+
 With the GNOME Shell indicator:
 
 ```bash
@@ -51,4 +57,3 @@ ls /sys/class/power_supply
 ```
 
 Then adjust `udev/90-elitebook-thermal-profile.rules`.
-
