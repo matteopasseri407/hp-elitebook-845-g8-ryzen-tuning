@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  shellcheck:
+    name: ShellCheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run ShellCheck
+        uses: ludeeus/action-shellcheck@master
+        env:
+          SHELLCHECK_OPTS: -e SC1091 -x
+        with:
+          severity: warning
+          ignore_paths: >-
+            .git
+            gnome-extension
+
+  ruff:
+    name: Ruff (Python watchers)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install ruff
+        run: pip install --no-cache-dir ruff==0.6.9
+      - name: Lint
+        run: |
+          ruff check \
+            src/elitebook-idle-watcher \
+            src/elitebook-steam-game-watcher
+      - name: Format check
+        run: |
+          ruff format --check \
+            src/elitebook-idle-watcher \
+            src/elitebook-steam-game-watcher
+
+  python-syntax:
+    name: Python syntax sanity
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Compile watchers
+        run: |
+          python3 -m py_compile \
+            src/elitebook-idle-watcher \
+            src/elitebook-steam-game-watcher
