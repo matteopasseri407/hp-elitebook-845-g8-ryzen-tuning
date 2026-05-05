@@ -44,10 +44,13 @@ sudo reboot
 Manual selections win over automation:
 
 - `sudo elitebook-thermal-profile ac`
+- `sudo elitebook-thermal-profile performance`
 - `sudo elitebook-thermal-profile battery`
 - `sudo elitebook-thermal-profile battery-saver`
 - `sudo elitebook-thermal-profile gaming`
 - `sudo elitebook-thermal-profile cool`
+
+The optional GNOME indicator exposes only `Auto`, `Performance`, `Gaming`, and `Cool` to avoid making automatic battery policy look like a daily manual choice.
 
 To return to automatic AC/battery behavior:
 

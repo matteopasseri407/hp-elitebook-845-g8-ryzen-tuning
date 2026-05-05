@@ -48,7 +48,26 @@ const PROFILES = {
     },
 };
 
-const PROFILE_ORDER = ['ac', 'performance', 'gaming', 'battery', 'battery-saver', 'cool'];
+const ACTIONS = {
+    auto: {
+        label: 'Auto',
+        icon: 'auto-symbolic.svg',
+    },
+    performance: {
+        label: 'Performance',
+        icon: 'bolt-symbolic.svg',
+    },
+    gaming: {
+        label: 'Gaming',
+        icon: 'gamepad-symbolic.svg',
+    },
+    cool: {
+        label: 'Cool',
+        icon: 'cool-symbolic.svg',
+    },
+};
+
+const ACTION_ORDER = ['auto', 'performance', 'gaming', 'cool'];
 
 class ThermalIndicator extends PanelMenu.Button {
     static {
@@ -60,7 +79,7 @@ class ThermalIndicator extends PanelMenu.Button {
 
         this._extension = extension;
         this._profile = 'ac';
-        this._items = {};
+        this._actionItems = {};
         this._fallbackTimeoutId = 0;
         this._monitors = [];
         this._coalesceId = 0;
@@ -137,25 +156,19 @@ class ThermalIndicator extends PanelMenu.Button {
 
         this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 
-        this._autoItem = new PopupMenu.PopupMenuItem('Return to Auto');
-        this._autoItem.connect('activate', () => this._applyProfile('auto'));
-        this.menu.addMenuItem(this._autoItem);
-
-        this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
-
-        this._manualHeader = new PopupMenu.PopupMenuItem('Manual profiles', {reactive: false});
+        this._manualHeader = new PopupMenu.PopupMenuItem('Power mode', {reactive: false});
         this.menu.addMenuItem(this._manualHeader);
 
-        for (const profile of PROFILE_ORDER) {
-            const data = PROFILES[profile];
+        for (const action of ACTION_ORDER) {
+            const data = ACTIONS[action];
             const item = new PopupMenu.PopupImageMenuItem(
                 data.label,
-                this._iconFor(profile),
+                this._iconForAction(action),
                 {style_class: 'elitebook-thermal-profile-item'},
             );
 
-            item.connect('activate', () => this._applyProfile(profile));
-            this._items[profile] = item;
+            item.connect('activate', () => this._applyProfile(action));
+            this._actionItems[action] = item;
             this.menu.addMenuItem(item);
         }
 
@@ -167,6 +180,12 @@ class ThermalIndicator extends PanelMenu.Button {
 
     _iconFor(profile) {
         const iconName = PROFILES[profile]?.icon ?? PROFILES.ac.icon;
+        const path = GLib.build_filenamev([this._extension.path, 'icons', iconName]);
+        return Gio.FileIcon.new(Gio.File.new_for_path(path));
+    }
+
+    _iconForAction(action) {
+        const iconName = ACTIONS[action]?.icon ?? ACTIONS.auto.icon;
         const path = GLib.build_filenamev([this._extension.path, 'icons', iconName]);
         return Gio.FileIcon.new(Gio.File.new_for_path(path));
     }
@@ -221,6 +240,13 @@ class ThermalIndicator extends PanelMenu.Button {
         return 'Soft - responsive saving';
     }
 
+    _actionIsActive(action, profile, source) {
+        if (action === 'auto')
+            return source !== 'manual' && !['performance', 'gaming', 'cool'].includes(profile);
+
+        return profile === action;
+    }
+
     _refresh() {
         const state = this._readState();
         const idleState = this._readIdleState();
@@ -233,20 +259,17 @@ class ThermalIndicator extends PanelMenu.Button {
         this._profile = profile;
         this._icon.gicon = this._iconFor(effectiveIconProfile);
 
-        for (const [name, item] of Object.entries(this._items)) {
-            item.setOrnament(name === profile
+        const source = state?.source ?? '';
+        for (const [name, item] of Object.entries(this._actionItems)) {
+            item.setOrnament(this._actionIsActive(name, profile, source)
                 ? PopupMenu.Ornament.CHECK
                 : PopupMenu.Ornament.NONE);
         }
 
-        const source = state?.source ?? '';
         const data = PROFILES[profile];
         this._modeItem.label.text = `Control: ${this._sourceLabel(source)}`;
-        this._baseItem.label.text = `Base profile: ${data.label} - ${data.detail}`;
+        this._baseItem.label.text = `Current profile: ${data.label} - ${data.detail}`;
         this._idleItem.label.text = `Idle overlay: ${this._idleLabel(idleState)}`;
-        this._autoItem.setOrnament(source === 'manual'
-            ? PopupMenu.Ornament.NONE
-            : PopupMenu.Ornament.CHECK);
         this.accessible_name = `EliteBook power: ${data.label}, idle ${this._idleLabel(idleState)}`;
     }
 

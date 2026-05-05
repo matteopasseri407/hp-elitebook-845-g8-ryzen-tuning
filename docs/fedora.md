@@ -76,6 +76,8 @@ cat /run/elitebook-thermal-profile/idle-watcher
 
 The idle watcher is a staged overlay, not a profile replacement. Soft idle starts after a few quiet seconds with low-power EPP and no frequency cap. Deep idle starts only after longer quiet, then disables boost and uses a temporary low max frequency. Any real CPU load restores the current `ac`, `battery`, `gaming`, or manual profile.
 
+The GNOME indicator keeps the manual surface small on purpose: `Auto`, `Performance`, `Gaming`, and `Cool`. Battery-specific profiles are still active underneath through `auto`, udev, and the low-battery threshold, but they are shown as current state instead of extra manual buttons.
+
 ## AC/Battery Automation
 
 The udev rules trigger when `power_supply` devices with `POWER_SUPPLY_TYPE=Mains` or `POWER_SUPPLY_TYPE=Battery` change state. The battery rule is what lets `auto` switch into `battery-saver` as charge drops, not only when AC is unplugged.
