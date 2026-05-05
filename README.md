@@ -55,6 +55,8 @@ This repository does not vendor RyzenAdj. Install it from your distribution, COP
 
 ```bash
 sudo dnf install tuned python3 polkit
+git clone https://github.com/matteopasseri407/hp-elitebook-845-g8-ryzen-tuning.git
+cd hp-elitebook-845-g8-ryzen-tuning
 sudo ./scripts/install-fedora.sh
 ```
 
@@ -141,7 +143,7 @@ Read [docs/safety.md](docs/safety.md) before adapting it to other machines.
 
 ## Roadmap
 
-- Fedora COPR packaging
+- Fedora COPR packaging once the RyzenAdj dependency path is clean
 - RPM spec cleanup for `/usr/libexec` and packaged systemd units
 - More test reports across BIOS versions
 - Optional install profiles for other Linux distributions

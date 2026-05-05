@@ -1,6 +1,8 @@
 # RPM Packaging Plan
 
-The current install script is source-based. For Fedora distribution, the preferred next step is a proper RPM and COPR repository.
+The current Fedora path is source-based installation through `scripts/install-fedora.sh`.
+
+For wider Fedora distribution, the preferred next step is a proper RPM and COPR repository. Do not publish a COPR build until the RyzenAdj dependency story is explicit: either RyzenAdj is available from a known package source, or this project documents a safe companion package/installation path.
 
 Initial packaging decisions:
 
@@ -19,4 +21,3 @@ Suggested package split:
 - `gnome-shell-extension-elitebook-thermal-profile`
 
 COPR is the most practical first distribution channel for Fedora users. Broader Linux packaging can follow after more hardware reports.
-

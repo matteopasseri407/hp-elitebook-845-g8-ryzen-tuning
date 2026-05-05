@@ -15,6 +15,9 @@ PROFILE_SCRIPT = Path(
 STATE_DIR = Path(
     os.environ.get("ELITEBOOK_THERMAL_STATE_DIR", "/run/elitebook-thermal-profile")
 )
+POWER_SUPPLY_DIR = Path(
+    os.environ.get("ELITEBOOK_POWER_SUPPLY_DIR", "/sys/class/power_supply")
+)
 PROFILE_STATE = STATE_DIR / "current"
 WATCHER_STATE = STATE_DIR / "steam-game-watcher"
 
@@ -44,19 +47,31 @@ IGNORED_COMMANDS = {
 
 
 def on_ac_power() -> bool:
+    ac_online = POWER_SUPPLY_DIR / "AC" / "online"
     try:
-        return (
-            Path("/sys/class/power_supply/AC/online")
-            .read_text(encoding="utf-8")
-            .strip()
-            == "1"
-        )
+        return ac_online.read_text(encoding="utf-8").strip() == "1"
+    except OSError:
+        pass
+
+    try:
+        supplies = list(POWER_SUPPLY_DIR.glob("*"))
     except OSError:
         return True
 
+    for supply in supplies:
+        try:
+            if (supply / "type").read_text(encoding="utf-8").strip() != "Mains":
+                continue
+            online = (supply / "online").read_text(encoding="utf-8").strip()
+            return online == "1"
+        except OSError:
+            continue
+
+    return True
+
 
 def battery_capacity() -> int | None:
-    for supply in Path("/sys/class/power_supply").glob("*"):
+    for supply in POWER_SUPPLY_DIR.glob("*"):
         try:
             if (supply / "type").read_text(encoding="utf-8").strip() != "Battery":
                 continue

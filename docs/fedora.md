@@ -2,6 +2,8 @@
 
 Fedora is the primary tested distribution for this repository.
 
+Current distribution status: Fedora source install is supported and tested. COPR/RPM packaging is planned, but not published yet because RyzenAdj is not currently treated as a packaged Fedora dependency in this repository.
+
 ## Packages
 
 ```bash
