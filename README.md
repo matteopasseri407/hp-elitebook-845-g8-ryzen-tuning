@@ -37,7 +37,7 @@ There is no `stock` profile. On the tested unit, the stock firmware/SMU behavior
 - system sleep hook: reapplies `auto` after resume
 - idle overlay watcher: applies soft/deep idle hints with near-zero polling overhead
 - Steam game watcher: switches to `gaming` only while a real Steam game process is detected
-- optional GNOME Shell panel indicator: four primary actions (`Auto`, `Performance`, `Gaming`, `Cool`) while automatic `battery` and `battery-saver` states remain status-only
+- optional GNOME Shell panel indicator: three human actions (`Auto`, `Game`, `Quiet`) while automatic `ac`, `battery`, `battery-saver`, and idle states remain status-only
 
 The idle watcher is intentionally cheap. It samples aggregate `/proc/stat` and `/proc/loadavg` once per second, does not scan processes, and calls RyzenAdj only when entering or leaving deep idle. The Steam watcher scans `/proc` only on long intervals and is constrained with low scheduling priority, `CPUQuota=2%`, and `MemoryMax=64M`.
 
@@ -94,7 +94,7 @@ gnome-extensions enable elitebook-thermal-profile@matteopasseri.github.io
 
 On Wayland, a logout/login may be needed after installing a local extension.
 
-The GNOME indicator intentionally exposes only the four modes worth choosing by hand: `Auto`, `Performance`, `Gaming`, and `Cool`. `battery` and `battery-saver` are automatic policy states shown in the current status, not primary manual choices.
+The GNOME indicator intentionally exposes only `Auto`, `Game`, and `Quiet`. `performance`, `battery`, and `battery-saver` remain technical profiles available to automation or the CLI, not primary daily UI choices.
 
 ## Use
 

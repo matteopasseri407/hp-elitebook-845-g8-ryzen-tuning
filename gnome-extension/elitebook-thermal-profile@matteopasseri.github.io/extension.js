@@ -17,34 +17,34 @@ const IDLE_STATE_FILE = '/run/elitebook-thermal-profile/idle-watcher';
 
 const PROFILES = {
     ac: {
-        label: 'Balanced',
+        label: 'Plugged in',
         icon: 'bolt-symbolic.svg',
-        detail: 'default daily mode',
+        detail: 'balanced automatic power',
     },
     performance: {
         label: 'Performance',
         icon: 'bolt-symbolic.svg',
-        detail: 'snappy plugged-in mode',
+        detail: 'responsive manual override',
     },
     gaming: {
-        label: 'Gaming',
+        label: 'Game',
         icon: 'gamepad-symbolic.svg',
         detail: 'more APU room',
     },
     battery: {
-        label: 'Battery',
+        label: 'On battery',
         icon: 'leaf-symbolic.svg',
-        detail: 'normal unplugged mode',
+        detail: 'efficient with boost available',
     },
     'battery-saver': {
-        label: 'Battery Saver',
+        label: 'Low battery',
         icon: 'leaf-symbolic.svg',
         detail: 'low-battery guard',
     },
     cool: {
-        label: 'Cool',
+        label: 'Quiet',
         icon: 'cool-symbolic.svg',
-        detail: 'quiet and cool',
+        detail: 'cooler manual override',
     },
 };
 
@@ -53,21 +53,17 @@ const ACTIONS = {
         label: 'Auto',
         icon: 'auto-symbolic.svg',
     },
-    performance: {
-        label: 'Performance',
-        icon: 'bolt-symbolic.svg',
-    },
     gaming: {
-        label: 'Gaming',
+        label: 'Game',
         icon: 'gamepad-symbolic.svg',
     },
     cool: {
-        label: 'Cool',
+        label: 'Quiet',
         icon: 'cool-symbolic.svg',
     },
 };
 
-const ACTION_ORDER = ['auto', 'performance', 'gaming', 'cool'];
+const ACTION_ORDER = ['auto', 'gaming', 'cool'];
 
 class ThermalIndicator extends PanelMenu.Button {
     static {
@@ -156,7 +152,7 @@ class ThermalIndicator extends PanelMenu.Button {
 
         this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 
-        this._manualHeader = new PopupMenu.PopupMenuItem('Power mode', {reactive: false});
+        this._manualHeader = new PopupMenu.PopupMenuItem('Power override', {reactive: false});
         this.menu.addMenuItem(this._manualHeader);
 
         for (const action of ACTION_ORDER) {
@@ -242,7 +238,7 @@ class ThermalIndicator extends PanelMenu.Button {
 
     _actionIsActive(action, profile, source) {
         if (action === 'auto')
-            return source !== 'manual' && !['performance', 'gaming', 'cool'].includes(profile);
+            return source !== 'manual' && !['gaming', 'cool'].includes(profile);
 
         return profile === action;
     }
@@ -268,8 +264,8 @@ class ThermalIndicator extends PanelMenu.Button {
 
         const data = PROFILES[profile];
         this._modeItem.label.text = `Control: ${this._sourceLabel(source)}`;
-        this._baseItem.label.text = `Current profile: ${data.label} - ${data.detail}`;
-        this._idleItem.label.text = `Idle overlay: ${this._idleLabel(idleState)}`;
+        this._baseItem.label.text = `Current: ${data.label} - ${data.detail}`;
+        this._idleItem.label.text = `Idle: ${this._idleLabel(idleState)}`;
         this.accessible_name = `EliteBook power: ${data.label}, idle ${this._idleLabel(idleState)}`;
     }
 

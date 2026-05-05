@@ -50,7 +50,7 @@ Manual selections win over automation:
 - `sudo elitebook-thermal-profile gaming`
 - `sudo elitebook-thermal-profile cool`
 
-The optional GNOME indicator exposes only `Auto`, `Performance`, `Gaming`, and `Cool` to avoid making automatic battery policy look like a daily manual choice.
+The optional GNOME indicator exposes only `Auto`, `Game`, and `Quiet` to avoid making technical profiles look like daily manual choices.
 
 To return to automatic AC/battery behavior:
 
