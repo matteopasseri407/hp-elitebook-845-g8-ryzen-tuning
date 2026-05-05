@@ -1,0 +1,19 @@
+[Unit]
+Description=Auto-switch EliteBook thermal profile for Steam games
+Documentation=https://github.com/matteopasseri407/hp-elitebook-845-g8-ryzen-tuning
+After=elitebook-thermal-profile.service
+Wants=elitebook-thermal-profile.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/elitebook-steam-game-watcher watch
+Restart=on-failure
+RestartSec=5s
+Nice=10
+IOSchedulingClass=idle
+CPUQuota=2%
+MemoryMax=64M
+
+[Install]
+WantedBy=multi-user.target
+

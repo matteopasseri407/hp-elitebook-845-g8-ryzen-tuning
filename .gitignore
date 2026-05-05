@@ -1,0 +1,13 @@
+.DS_Store
+*.swp
+*.tmp
+*.bak
+__pycache__/
+.pytest_cache/
+dist/
+build/
+*.rpm
+*.src.rpm
+*.tar.gz
+*.zip
+

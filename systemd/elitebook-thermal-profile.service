@@ -1,0 +1,14 @@
+[Unit]
+Description=Apply HP EliteBook 845 G8 Ryzen thermal profile
+Documentation=https://github.com/matteopasseri407/hp-elitebook-845-g8-ryzen-tuning
+After=tuned.service
+Wants=tuned.service
+
+[Service]
+Type=oneshot
+Environment=ELITEBOOK_PROFILE_SOURCE=system-auto
+ExecStart=/usr/local/sbin/elitebook-thermal-profile auto
+
+[Install]
+WantedBy=multi-user.target
+

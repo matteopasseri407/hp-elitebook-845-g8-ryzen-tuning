@@ -1,0 +1,241 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+import os
+import re
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+PROFILE_SCRIPT = Path(os.environ.get("ELITEBOOK_PROFILE_SCRIPT", "/usr/local/sbin/elitebook-thermal-profile"))
+STATE_DIR = Path(os.environ.get("ELITEBOOK_THERMAL_STATE_DIR", "/run/elitebook-thermal-profile"))
+PROFILE_STATE = STATE_DIR / "current"
+WATCHER_STATE = STATE_DIR / "steam-game-watcher"
+
+INTERVAL_AC = int(os.environ.get("ELITEBOOK_STEAM_WATCH_INTERVAL_AC", "60"))
+INTERVAL_BATTERY = int(os.environ.get("ELITEBOOK_STEAM_WATCH_INTERVAL_BATTERY", "120"))
+INTERVAL_WHILE_STEAM = int(os.environ.get("ELITEBOOK_STEAM_WATCH_INTERVAL_ACTIVE", "20"))
+
+ID_RE = re.compile(rb"^[1-9][0-9]*$")
+STEAM_ID_KEYS = (b"SteamGameId", b"SteamAppId", b"STEAM_COMPAT_APP_ID")
+STEAM_ROOT_COMMANDS = {
+    "steam",
+    "steamwebhelper",
+}
+IGNORED_COMMANDS = {
+    "steam",
+    "steamwebhelper",
+    "steam-runtime-launcher-service",
+    "pressure-vessel-adverb",
+    "pv-bwrap",
+}
+
+
+def on_ac_power() -> bool:
+    try:
+        return Path("/sys/class/power_supply/AC/online").read_text(encoding="utf-8").strip() == "1"
+    except OSError:
+        return True
+
+
+def read_current_state() -> dict[str, str]:
+    state: dict[str, str] = {}
+    try:
+        for line in PROFILE_STATE.read_text(encoding="utf-8").splitlines():
+            if "=" in line:
+                key, value = line.split("=", 1)
+                state[key] = value
+    except OSError:
+        pass
+    return state
+
+
+def watcher_active() -> bool:
+    try:
+        return "active=1" in WATCHER_STATE.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return False
+
+
+def mark_active(game: dict[str, str]) -> None:
+    STATE_DIR.mkdir(mode=0o755, exist_ok=True)
+    WATCHER_STATE.write_text(
+        "\n".join(
+            [
+                "active=1",
+                f"pid={game['pid']}",
+                f"comm={game['comm']}",
+                f"appid={game['appid']}",
+                f"updated={time.strftime('%Y-%m-%dT%H:%M:%S%z')}",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    WATCHER_STATE.chmod(0o644)
+
+
+def clear_active() -> None:
+    try:
+        WATCHER_STATE.unlink()
+    except FileNotFoundError:
+        pass
+
+
+def steam_appid_from_environ(environ_path: Path) -> str | None:
+    try:
+        data = environ_path.read_bytes()
+    except OSError:
+        return None
+
+    for entry in data.split(b"\0"):
+        if b"=" not in entry:
+            continue
+        key, value = entry.split(b"=", 1)
+        if key in STEAM_ID_KEYS and ID_RE.match(value):
+            return value.decode("ascii", errors="ignore")
+    return None
+
+
+def process_table() -> dict[int, dict[str, int | str]]:
+    processes: dict[int, dict[str, int | str]] = {}
+
+    for proc in Path("/proc").iterdir():
+        if not proc.name.isdigit():
+            continue
+
+        pid = int(proc.name)
+        try:
+            comm = (proc / "comm").read_text(encoding="utf-8", errors="ignore").strip()
+            stat = (proc / "stat").read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+
+        try:
+            after_comm = stat.rsplit(") ", 1)[1].split()
+            ppid = int(after_comm[1])
+        except (IndexError, ValueError):
+            continue
+
+        processes[pid] = {"ppid": ppid, "comm": comm}
+
+    return processes
+
+
+def steam_descendants(processes: dict[int, dict[str, int | str]]) -> set[int]:
+    roots = {
+        pid
+        for pid, info in processes.items()
+        if str(info["comm"]) in STEAM_ROOT_COMMANDS
+    }
+    if not roots:
+        return set()
+
+    children: dict[int, list[int]] = {}
+    for pid, info in processes.items():
+        children.setdefault(int(info["ppid"]), []).append(pid)
+
+    descendants: set[int] = set()
+    stack = list(roots)
+    while stack:
+        parent = stack.pop()
+        for child in children.get(parent, []):
+            if child not in descendants:
+                descendants.add(child)
+                stack.append(child)
+
+    return descendants - roots
+
+
+def find_steam_game() -> tuple[dict[str, str] | None, bool]:
+    processes = process_table()
+    candidates = steam_descendants(processes)
+    if not candidates:
+        return None, False
+
+    for pid in candidates:
+        info = processes.get(pid)
+        if not info:
+            continue
+
+        comm = str(info["comm"])
+        if comm in IGNORED_COMMANDS:
+            continue
+
+        appid = steam_appid_from_environ(Path("/proc") / str(pid) / "environ")
+        if appid:
+            return {"pid": str(pid), "comm": comm, "appid": appid}, True
+
+    return None, True
+
+
+def apply_profile(profile: str) -> bool:
+    env = os.environ.copy()
+    env["ELITEBOOK_PROFILE_SOURCE"] = "steam-game-watcher" if profile == "gaming" else "auto"
+
+    result = subprocess.run(
+        [str(PROFILE_SCRIPT), profile],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        env=env,
+        check=False,
+    )
+    return result.returncode == 0
+
+
+def check_once() -> bool:
+    game, steam_running = find_steam_game()
+
+    if game:
+        state = read_current_state()
+        current = state.get("profile", "")
+        source = state.get("source", "")
+        if source == "manual":
+            clear_active()
+            return True
+
+        if current != "gaming":
+            if apply_profile("gaming"):
+                mark_active(game)
+                print(
+                    f"Steam game detected: appid={game['appid']} "
+                    f"pid={game['pid']} comm={game['comm']}; applied gaming",
+                    flush=True,
+                )
+        elif watcher_active():
+            mark_active(game)
+        return True
+
+    if watcher_active():
+        state = read_current_state()
+        current = state.get("profile", "")
+        source = state.get("source", "")
+        if current == "gaming" and source == "steam-game-watcher" and apply_profile("auto"):
+            print("Steam game ended; restored auto profile", flush=True)
+        clear_active()
+
+    return steam_running
+
+
+def main() -> int:
+    mode = sys.argv[1] if len(sys.argv) > 1 else "watch"
+    if mode == "once":
+        check_once()
+        return 0
+    if mode != "watch":
+        print(f"Usage: {Path(sys.argv[0]).name} [watch|once]", file=sys.stderr)
+        return 2
+
+    while True:
+        steam_running = check_once()
+        if steam_running:
+            interval = INTERVAL_WHILE_STEAM
+        elif on_ac_power():
+            interval = INTERVAL_AC
+        else:
+            interval = INTERVAL_BATTERY
+        time.sleep(interval)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
