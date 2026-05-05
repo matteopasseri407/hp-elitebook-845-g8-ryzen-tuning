@@ -38,6 +38,7 @@ Manual selections win over automation:
 
 - `sudo elitebook-thermal-profile ac`
 - `sudo elitebook-thermal-profile battery`
+- `sudo elitebook-thermal-profile battery-saver`
 - `sudo elitebook-thermal-profile gaming`
 - `sudo elitebook-thermal-profile cool`
 
@@ -46,6 +47,16 @@ To return to automatic AC/battery behavior:
 ```bash
 sudo elitebook-thermal-profile auto
 ```
+
+Low-battery protection is deliberately stronger than normal manual override behavior. When system automation runs at or below the configured threshold, it applies `battery-saver` even if a manual or Steam-driven profile was active. This is meant to prevent an unattended laptop from continuing a heavy workload until battery cutoff.
+
+The default threshold is 20%:
+
+```bash
+sudo ELITEBOOK_LOW_BATTERY_THRESHOLD=15 elitebook-thermal-profile auto
+```
+
+Set the threshold to `0` only if you intentionally want to disable the low-battery guard.
 
 ## Adapting To Other Laptops
 
@@ -65,4 +76,3 @@ Then change one variable at a time:
 - EPP
 
 Keep boost and frequency caps separate from SMU tuning so you can understand what each change did.
-

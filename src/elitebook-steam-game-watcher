@@ -15,6 +15,7 @@ WATCHER_STATE = STATE_DIR / "steam-game-watcher"
 INTERVAL_AC = int(os.environ.get("ELITEBOOK_STEAM_WATCH_INTERVAL_AC", "60"))
 INTERVAL_BATTERY = int(os.environ.get("ELITEBOOK_STEAM_WATCH_INTERVAL_BATTERY", "120"))
 INTERVAL_WHILE_STEAM = int(os.environ.get("ELITEBOOK_STEAM_WATCH_INTERVAL_ACTIVE", "20"))
+LOW_BATTERY_THRESHOLD = int(os.environ.get("ELITEBOOK_LOW_BATTERY_THRESHOLD", "20"))
 
 ID_RE = re.compile(rb"^[1-9][0-9]*$")
 STEAM_ID_KEYS = (b"SteamGameId", b"SteamAppId", b"STEAM_COMPAT_APP_ID")
@@ -36,6 +37,25 @@ def on_ac_power() -> bool:
         return Path("/sys/class/power_supply/AC/online").read_text(encoding="utf-8").strip() == "1"
     except OSError:
         return True
+
+
+def battery_capacity() -> int | None:
+    for supply in Path("/sys/class/power_supply").glob("*"):
+        try:
+            if (supply / "type").read_text(encoding="utf-8").strip() != "Battery":
+                continue
+            return int((supply / "capacity").read_text(encoding="utf-8").strip())
+        except (OSError, ValueError):
+            continue
+    return None
+
+
+def battery_is_low() -> bool:
+    if LOW_BATTERY_THRESHOLD <= 0 or on_ac_power():
+        return False
+
+    capacity = battery_capacity()
+    return capacity is not None and capacity <= LOW_BATTERY_THRESHOLD
 
 
 def read_current_state() -> dict[str, str]:
@@ -190,6 +210,13 @@ def check_once() -> bool:
         state = read_current_state()
         current = state.get("profile", "")
         source = state.get("source", "")
+
+        if battery_is_low():
+            if current == "gaming" and source == "steam-game-watcher":
+                apply_profile("auto")
+            clear_active()
+            return True
+
         if source == "manual":
             clear_active()
             return True

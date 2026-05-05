@@ -6,6 +6,7 @@ Wants=elitebook-thermal-profile.service
 
 [Service]
 Type=simple
+Environment=ELITEBOOK_LOW_BATTERY_THRESHOLD=20
 ExecStart=/usr/local/sbin/elitebook-steam-game-watcher watch
 Restart=on-failure
 RestartSec=5s
@@ -16,4 +17,3 @@ MemoryMax=64M
 
 [Install]
 WantedBy=multi-user.target
-

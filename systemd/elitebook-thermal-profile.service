@@ -7,8 +7,8 @@ Wants=tuned.service
 [Service]
 Type=oneshot
 Environment=ELITEBOOK_PROFILE_SOURCE=system-auto
+Environment=ELITEBOOK_LOW_BATTERY_THRESHOLD=20
 ExecStart=/usr/local/sbin/elitebook-thermal-profile auto
 
 [Install]
 WantedBy=multi-user.target
-

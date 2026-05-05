@@ -29,6 +29,11 @@ const PROFILES = {
         icon: 'leaf-symbolic.svg',
         detail: '30 W burst, 15 W sustained, 88 C',
     },
+    'battery-saver': {
+        label: 'Saver',
+        icon: 'leaf-symbolic.svg',
+        detail: '15 W burst, 8 W sustained, boost off',
+    },
     cool: {
         label: 'Cool',
         icon: 'cool-symbolic.svg',
@@ -68,7 +73,7 @@ class ThermalIndicator extends PanelMenu.Button {
     }
 
     _buildMenu() {
-        for (const profile of ['ac', 'gaming', 'battery', 'cool']) {
+        for (const profile of ['ac', 'gaming', 'battery', 'battery-saver', 'cool']) {
             const data = PROFILES[profile];
             const item = new PopupMenu.PopupImageMenuItem(
                 data.label,
@@ -188,4 +193,3 @@ export default class EliteBookThermalProfileExtension extends Extension {
         this._indicator = null;
     }
 }
-

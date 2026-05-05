@@ -20,6 +20,7 @@ This is intentionally hardware-scoped. The main script refuses to run on unrecog
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `ac` | Plugged in daily work | on | uncapped | `balance_performance` | 30 W | 18 W | 90 C |
 | `battery` | Unplugged work | on | uncapped | `balance_power` | 30 W | 15 W | 88 C |
+| `battery-saver` | Automatic low-battery guard | off | 1.8 GHz | `power` | 15 W | 8 W | 80 C |
 | `gaming` | Steam game process detected | on | uncapped | `balance_performance` | 30 W | 23 W | 92 C |
 | `cool` | Quiet/cool fallback | on | uncapped | `power` | 22 W | 12 W | 85 C |
 
@@ -27,9 +28,9 @@ There is no `stock` profile. On the tested unit, the stock firmware/SMU behavior
 
 ## What It Installs
 
-- `elitebook-thermal-profile`: applies `auto`, `ac`, `battery`, `gaming`, or `cool`
+- `elitebook-thermal-profile`: applies `auto`, `ac`, `battery`, `battery-saver`, `gaming`, or `cool`
 - systemd oneshot service: reapplies `auto` at boot
-- udev rule: reapplies `auto` when AC power changes
+- udev rules: reapply `auto` when AC power or battery state changes
 - system sleep hook: reapplies `auto` after resume
 - Steam game watcher: switches to `gaming` only while a real Steam game process is detected
 - optional GNOME Shell panel indicator: white bolt/controller/leaf/cool icons with a profile switcher
@@ -79,13 +80,16 @@ On Wayland, a logout/login may be needed after installing a local extension.
 sudo elitebook-thermal-profile auto
 sudo elitebook-thermal-profile ac
 sudo elitebook-thermal-profile battery
+sudo elitebook-thermal-profile battery-saver
 sudo elitebook-thermal-profile gaming
 sudo elitebook-thermal-profile cool
 ```
 
-`auto` maps to `ac` when plugged in and `battery` when unplugged.
+`auto` maps to `ac` when plugged in, `battery` when unplugged, and `battery-saver` when unplugged at or below the low-battery threshold. The default threshold is 20% and can be changed with `ELITEBOOK_LOW_BATTERY_THRESHOLD`.
 
 Manual profiles intentionally win over system automation. Running `sudo elitebook-thermal-profile auto` clears the manual override and returns control to AC/battery automation. The Steam watcher also respects manual overrides.
+
+Low-battery protection is the exception: when the systemd/udev automation sees the battery at or below the threshold, it may override an active manual or Steam profile and apply `battery-saver`. This protects unattended systems from continuing a high-power workload until firmware cutoff.
 
 Current state is exposed at:
 

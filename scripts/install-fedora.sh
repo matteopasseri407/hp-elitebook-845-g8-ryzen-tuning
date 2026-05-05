@@ -17,6 +17,7 @@ Installs:
   /etc/systemd/system/elitebook-thermal-profile.service
   /etc/udev/rules.d/90-elitebook-thermal-profile.rules
   /etc/systemd/system-sleep/elitebook-thermal-profile
+  low-battery battery-saver automation at 20%
 
 By default it also installs and enables the Steam game watcher.
 EOF

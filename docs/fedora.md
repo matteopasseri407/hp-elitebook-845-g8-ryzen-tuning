@@ -49,10 +49,13 @@ cat /run/elitebook-thermal-profile/current
 
 ## AC/Battery Automation
 
-The udev rule triggers when a `power_supply` device with `POWER_SUPPLY_TYPE=Mains` changes state. If your laptop exposes a different power supply layout, inspect it with:
+The udev rules trigger when `power_supply` devices with `POWER_SUPPLY_TYPE=Mains` or `POWER_SUPPLY_TYPE=Battery` change state. The battery rule is what lets `auto` switch into `battery-saver` as charge drops, not only when AC is unplugged.
+
+If your laptop exposes a different power supply layout, inspect it with:
 
 ```bash
 udevadm info --query=property --path=/sys/class/power_supply/AC
+udevadm info --query=property --path=/sys/class/power_supply/BAT0
 ls /sys/class/power_supply
 ```
 

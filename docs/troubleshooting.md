@@ -74,3 +74,4 @@ This is by design. Manual profile selections win until you run:
 sudo elitebook-thermal-profile auto
 ```
 
+The exception is low-battery protection. If the battery is at or below the configured threshold, system automation can override manual or Steam-driven profiles and apply `battery-saver`.

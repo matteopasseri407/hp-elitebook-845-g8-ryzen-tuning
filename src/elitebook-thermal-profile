@@ -7,12 +7,14 @@ STATE_FILE="$STATE_DIR/current"
 
 usage() {
   cat >&2 <<'EOF'
-Usage: elitebook-thermal-profile [auto|ac|battery|gaming|cool|--check-hardware]
+Usage: elitebook-thermal-profile [auto|ac|battery|battery-saver|gaming|cool|--check-hardware]
 
 Environment:
   RYZENADJ=/path/to/ryzenadj
   ELITEBOOK_PROFILE_SOURCE=manual|auto|system-auto|steam-game-watcher
   ELITEBOOK_THERMAL_FORCE=1   skip the HP EliteBook 845 G8 / Ryzen 7 PRO 5850U guard
+  ELITEBOOK_LOW_BATTERY_THRESHOLD=20
+  ELITEBOOK_BATTERY_SAVER_MAX_FREQ_KHZ=1800000
 EOF
 }
 
@@ -32,6 +34,62 @@ truthy() {
     1|true|TRUE|yes|YES|on|ON) return 0 ;;
     *) return 1 ;;
   esac
+}
+
+is_uint() {
+  [[ "${1:-}" =~ ^[0-9]+$ ]]
+}
+
+on_ac_power() {
+  if [[ -r /sys/class/power_supply/AC/online ]]; then
+    [[ "$(cat /sys/class/power_supply/AC/online)" = "1" ]]
+    return
+  fi
+
+  local supply type online
+  for supply in /sys/class/power_supply/*; do
+    [[ -r "$supply/type" ]] || continue
+    type="$(read_trimmed "$supply/type")"
+    [[ "$type" = "Mains" ]] || continue
+    [[ -r "$supply/online" ]] || continue
+    online="$(read_trimmed "$supply/online")"
+    [[ "$online" = "1" ]]
+    return
+  done
+
+  return 1
+}
+
+battery_device() {
+  local supply type
+  for supply in /sys/class/power_supply/*; do
+    [[ -r "$supply/type" ]] || continue
+    type="$(read_trimmed "$supply/type")"
+    if [[ "$type" = "Battery" ]]; then
+      echo "$supply"
+      return 0
+    fi
+  done
+  return 1
+}
+
+battery_capacity() {
+  local supply capacity
+  supply="$(battery_device)" || return 1
+  [[ -r "$supply/capacity" ]] || return 1
+  capacity="$(read_trimmed "$supply/capacity")"
+  is_uint "$capacity" || return 1
+  echo "$capacity"
+}
+
+battery_is_low() {
+  local threshold capacity
+  threshold="${ELITEBOOK_LOW_BATTERY_THRESHOLD:-20}"
+  is_uint "$threshold" || die "ELITEBOOK_LOW_BATTERY_THRESHOLD must be an integer percentage"
+  [[ "$threshold" -gt 0 ]] || return 1
+  on_ac_power && return 1
+  capacity="$(battery_capacity)" || return 1
+  [[ "$capacity" -le "$threshold" ]]
 }
 
 find_ryzenadj() {
@@ -77,9 +135,10 @@ assert_supported_hardware() {
 }
 
 detect_profile() {
-  if [[ -r /sys/class/power_supply/AC/online ]] &&
-    [[ "$(cat /sys/class/power_supply/AC/online)" = "1" ]]; then
+  if on_ac_power; then
     echo ac
+  elif battery_is_low; then
+    echo battery-saver
   else
     echo battery
   fi
@@ -91,9 +150,13 @@ current_value() {
 }
 
 write_state() {
+  local battery_percent
+  battery_percent="$(battery_capacity || true)"
+  [[ -n "$battery_percent" ]] || battery_percent="unknown"
+
   "${SUDO[@]}" install -d -m 0755 "$STATE_DIR"
-  printf 'profile=%s\nsource=%s\nepp=%s\nstapm_mw=%s\nfast_mw=%s\nslow_mw=%s\napu_mw=%s\ntctl_c=%s\nboost=on\nmax_freq=uncapped\nupdated=%s\n' \
-    "$profile" "$profile_source" "$epp" "$stapm" "$fast" "$slow" "$apu" "$tctl" "$(date --iso-8601=seconds)" |
+  printf 'profile=%s\nsource=%s\nepp=%s\nstapm_mw=%s\nfast_mw=%s\nslow_mw=%s\napu_mw=%s\ntctl_c=%s\nboost=%s\nmax_freq=%s\nbattery_percent=%s\nlow_battery_threshold_percent=%s\nupdated=%s\n' \
+    "$profile" "$profile_source" "$epp" "$stapm" "$fast" "$slow" "$apu" "$tctl" "$boost" "$max_freq" "$battery_percent" "${ELITEBOOK_LOW_BATTERY_THRESHOLD:-20}" "$(date --iso-8601=seconds)" |
     "${SUDO[@]}" tee "$STATE_FILE" >/dev/null
   "${SUDO[@]}" chmod 0644 "$STATE_FILE"
 }
@@ -130,18 +193,24 @@ if [[ -z "$profile_source" ]]; then
 fi
 
 current_source="$(current_value source)"
+auto_profile=""
+if [[ "$requested_profile" = "auto" ]]; then
+  auto_profile="$(detect_profile)"
+fi
 
 if [[ "$requested_profile" = "auto" && "$profile_source" = "system-auto" ]]; then
-  case "$current_source" in
-    manual)
-      echo "Manual EliteBook thermal profile override is active; system auto left it unchanged."
-      exit 0
-      ;;
-    steam-game-watcher)
-      echo "Steam game profile is active; system auto left it unchanged."
-      exit 0
-      ;;
-  esac
+  if [[ "$auto_profile" != "battery-saver" ]]; then
+    case "$current_source" in
+      manual)
+        echo "Manual EliteBook thermal profile override is active; system auto left it unchanged."
+        exit 0
+        ;;
+      steam-game-watcher)
+        echo "Steam game profile is active; system auto left it unchanged."
+        exit 0
+        ;;
+    esac
+  fi
 fi
 
 if [[ "$profile_source" = "steam-game-watcher" && "$current_source" = "manual" ]]; then
@@ -151,8 +220,12 @@ fi
 
 profile="$requested_profile"
 if [[ "$profile" = "auto" ]]; then
-  profile="$(detect_profile)"
+  profile="$auto_profile"
 fi
+
+boost=on
+max_freq=uncapped
+tuned_profile=balanced
 
 case "$profile" in
   ac)
@@ -170,6 +243,18 @@ case "$profile" in
     slow=15000
     apu=15000
     tctl=88
+    ;;
+  battery-saver)
+    epp="power"
+    stapm=10000
+    fast=15000
+    slow=8000
+    apu=8000
+    tctl=80
+    boost=off
+    max_freq="${ELITEBOOK_BATTERY_SAVER_MAX_FREQ_KHZ:-1800000}"
+    tuned_profile=powersave
+    is_uint "$max_freq" || die "ELITEBOOK_BATTERY_SAVER_MAX_FREQ_KHZ must be an integer kHz value"
     ;;
   gaming)
     epp="balance_performance"
@@ -194,21 +279,26 @@ case "$profile" in
 esac
 
 if command -v tuned-adm >/dev/null 2>&1; then
-  "${SUDO[@]}" tuned-adm profile balanced >/dev/null
+  "${SUDO[@]}" tuned-adm profile "$tuned_profile" >/dev/null
 fi
 
 "${SUDO[@]}" sh -c '
+boost_value="$1"
+max_freq="$2"
+
 if [ -w /sys/devices/system/cpu/cpufreq/boost ]; then
-  echo 1 > /sys/devices/system/cpu/cpufreq/boost
+  echo "$boost_value" > /sys/devices/system/cpu/cpufreq/boost
 fi
 
 for d in /sys/devices/system/cpu/cpufreq/policy*; do
   [ -d "$d" ] || continue
-  if [ -w "$d/scaling_max_freq" ] && [ -r "$d/cpuinfo_max_freq" ]; then
+  if [ "$max_freq" = "uncapped" ] && [ -w "$d/scaling_max_freq" ] && [ -r "$d/cpuinfo_max_freq" ]; then
     cat "$d/cpuinfo_max_freq" > "$d/scaling_max_freq"
+  elif [ "$max_freq" != "uncapped" ] && [ -w "$d/scaling_max_freq" ]; then
+    echo "$max_freq" > "$d/scaling_max_freq"
   fi
 done
-'
+' sh "$([[ "$boost" = "on" ]] && echo 1 || echo 0)" "$max_freq"
 
 "${SUDO[@]}" sh -c "for d in /sys/devices/system/cpu/cpufreq/policy*; do [ -w \"\$d/energy_performance_preference\" ] && echo '$epp' > \"\$d/energy_performance_preference\"; done"
 
@@ -221,5 +311,4 @@ done
 
 write_state
 
-echo "EliteBook thermal profile '$profile' applied: boost on, no frequency cap, EPP $epp, FAST ${fast}mW, SLOW/APU ${slow}mW, Tctl ${tctl}C."
-
+echo "EliteBook thermal profile '$profile' applied: boost $boost, max freq $max_freq, EPP $epp, FAST ${fast}mW, SLOW/APU ${slow}mW, Tctl ${tctl}C."

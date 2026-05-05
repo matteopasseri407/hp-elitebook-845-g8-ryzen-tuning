@@ -45,8 +45,17 @@ They reduce the sustained CPU/APU envelope instead. This keeps the machine close
 | --- | --- |
 | `ac` | Main plugged-in work profile. Keeps burst response but targets a lower sustained thermal ceiling than stock. |
 | `battery` | Keeps performance available on battery but shifts EPP and sustained power for better idle/light-load efficiency. |
+| `battery-saver` | Automatic low-battery guard. Drops sustained power sharply, disables boost, and caps frequency so forgotten workloads drain the last battery segment more slowly. |
 | `gaming` | Gives the APU more sustained room for Steam games while keeping a lower temperature target than stock. |
 | `cool` | Manual quiet/cool fallback for calls, light work, or hot ambient conditions. |
+
+## Battery Incident
+
+On 2026-05-05, the test laptop was left unplugged with an Electron IDE, AI coding assistant, and browser workload open. Logs showed low battery at about 20%, then the system disappeared from the journal near 6% without an orderly shutdown sequence. After reconnecting AC, the laptop booted at about 3% charge.
+
+There was no evidence of a kernel panic or thermal shutdown. The practical failure mode was unattended battery drain: the original `battery` profile kept the laptop thermally controlled, but it was still permissive enough to let a forgotten workload run the pack down to firmware cutoff.
+
+That incident is why `battery-saver` exists and why the udev rules listen for battery state changes, not only AC plug/unplug events.
 
 ## Watcher Overhead
 
@@ -72,4 +81,3 @@ Good community test reports should include:
 - `sensors` output
 - `ryzenadj -i` output before and after applying a profile
 - whether the machine is plugged in or on battery
-
