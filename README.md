@@ -58,6 +58,10 @@ sudo dnf install tuned python3 polkit
 sudo ./scripts/install-fedora.sh
 ```
 
+The installer checks for `python3`, `tuned-adm` and RyzenAdj, then
+prints an explicit `dnf install` hint if anything is missing. `pkexec`
+is required only when installing the optional GNOME Shell indicator.
+
 To skip the Steam game watcher:
 
 ```bash
@@ -68,6 +72,12 @@ To skip the idle overlay watcher:
 
 ```bash
 sudo ./scripts/install-fedora.sh --without-idle-watcher
+```
+
+To install on a different laptop after reviewing the profile values:
+
+```bash
+sudo ./scripts/install-fedora.sh --force
 ```
 
 Optional GNOME Shell indicator:

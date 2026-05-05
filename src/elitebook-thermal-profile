@@ -150,15 +150,17 @@ current_value() {
 }
 
 write_state() {
-  local battery_percent
+  local battery_percent tmp
   battery_percent="$(battery_capacity || true)"
   [[ -n "$battery_percent" ]] || battery_percent="unknown"
 
   "${SUDO[@]}" install -d -m 0755 "$STATE_DIR"
+  tmp="$STATE_FILE.tmp.$$"
   printf 'profile=%s\nsource=%s\nepp=%s\nstapm_mw=%s\nfast_mw=%s\nslow_mw=%s\napu_mw=%s\ntctl_c=%s\nboost=%s\nmax_freq=%s\nbattery_percent=%s\nlow_battery_threshold_percent=%s\nupdated=%s\n' \
     "$profile" "$profile_source" "$epp" "$stapm" "$fast" "$slow" "$apu" "$tctl" "$boost" "$max_freq" "$battery_percent" "${ELITEBOOK_LOW_BATTERY_THRESHOLD:-20}" "$(date --iso-8601=seconds)" |
-    "${SUDO[@]}" tee "$STATE_FILE" >/dev/null
-  "${SUDO[@]}" chmod 0644 "$STATE_FILE"
+    "${SUDO[@]}" tee "$tmp" >/dev/null
+  "${SUDO[@]}" chmod 0644 "$tmp"
+  "${SUDO[@]}" mv -f "$tmp" "$STATE_FILE"
 }
 
 requested_profile="${1:-auto}"
@@ -287,9 +289,14 @@ case "$profile" in
 esac
 
 if command -v tuned-adm >/dev/null 2>&1; then
-  "${SUDO[@]}" tuned-adm profile "$tuned_profile" >/dev/null
+  if ! "${SUDO[@]}" timeout 10s tuned-adm profile "$tuned_profile" >/dev/null; then
+    echo "elitebook-thermal-profile: warning: tuned-adm did not apply '$tuned_profile'; continuing with direct CPU/SMU policy." >&2
+  fi
 fi
 
+# The inner script receives values as positional parameters; keep it single
+# quoted so the outer shell does not expand sysfs paths or loop variables.
+# shellcheck disable=SC2016
 "${SUDO[@]}" sh -c '
 boost_value="$1"
 max_freq="$2"

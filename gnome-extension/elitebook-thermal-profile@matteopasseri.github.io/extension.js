@@ -11,6 +11,7 @@ import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 
 const PROFILE_SCRIPT = '/usr/local/sbin/elitebook-thermal-profile';
+const STATE_DIR = '/run/elitebook-thermal-profile';
 const STATE_FILE = '/run/elitebook-thermal-profile/current';
 const IDLE_STATE_FILE = '/run/elitebook-thermal-profile/idle-watcher';
 
@@ -60,7 +61,9 @@ class ThermalIndicator extends PanelMenu.Button {
         this._extension = extension;
         this._profile = 'ac';
         this._items = {};
-        this._timeoutId = 0;
+        this._fallbackTimeoutId = 0;
+        this._monitors = [];
+        this._coalesceId = 0;
 
         this._icon = new St.Icon({
             style_class: 'system-status-icon elitebook-thermal-panel-icon',
@@ -70,12 +73,54 @@ class ThermalIndicator extends PanelMenu.Button {
 
         this._buildMenu();
         this._refresh();
-        this._timeoutId = GLib.timeout_add_seconds(
+        this._installMonitors();
+
+        // Slow safety-net poll in case a FileMonitor is missed (e.g. tmpfs
+        // edge cases or bind-mounts). FileMonitors do the real work.
+        this._fallbackTimeoutId = GLib.timeout_add_seconds(
             GLib.PRIORITY_DEFAULT,
-            10,
+            60,
             () => {
+                this._installMonitors();
                 this._refresh();
                 return GLib.SOURCE_CONTINUE;
+            },
+        );
+    }
+
+    _installMonitors() {
+        if (this._monitors.length > 0)
+            return;
+
+        try {
+            const monitor = Gio.File.new_for_path(STATE_DIR).monitor_directory(
+                Gio.FileMonitorFlags.NONE,
+                null,
+            );
+            monitor.set_rate_limit(200);
+            monitor.connect('changed', (_monitor, file) => {
+                const path = file?.get_path?.();
+                if (path === STATE_FILE || path === IDLE_STATE_FILE)
+                    this._scheduleRefresh();
+            });
+            this._monitors.push(monitor);
+        } catch (_error) {
+            // The state directory may not exist yet at extension start; the
+            // fallback timer will pick it up on the next tick.
+        }
+    }
+
+    _scheduleRefresh() {
+        if (this._coalesceId)
+            return;
+
+        this._coalesceId = GLib.timeout_add(
+            GLib.PRIORITY_DEFAULT,
+            150,
+            () => {
+                this._coalesceId = 0;
+                this._refresh();
+                return GLib.SOURCE_REMOVE;
             },
         );
     }
@@ -237,10 +282,17 @@ class ThermalIndicator extends PanelMenu.Button {
     }
 
     destroy() {
-        if (this._timeoutId) {
-            GLib.source_remove(this._timeoutId);
-            this._timeoutId = 0;
+        if (this._fallbackTimeoutId) {
+            GLib.source_remove(this._fallbackTimeoutId);
+            this._fallbackTimeoutId = 0;
         }
+        if (this._coalesceId) {
+            GLib.source_remove(this._coalesceId);
+            this._coalesceId = 0;
+        }
+        for (const monitor of this._monitors)
+            monitor.cancel();
+        this._monitors = [];
         super.destroy();
     }
 }

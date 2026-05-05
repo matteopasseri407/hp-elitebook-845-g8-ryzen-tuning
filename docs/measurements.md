@@ -74,10 +74,15 @@ On the original Fedora test system, the idle watcher used about 48 ms CPU over 6
 
 The Steam watcher remains separate and slow:
 
-- 60 second scan interval when plugged in and Steam is not running
+- 30 second scan interval when plugged in and Steam is not running
 - 120 second scan interval on battery and Steam is not running
 - 20 second interval while Steam is running
 - systemd constraints: `Nice=10`, `IOSchedulingClass=idle`, `CPUQuota=2%`, `MemoryMax=64M`
+
+While a Steam game profile is active the idle overlay watcher is
+suppressed entirely. Short low-CPU windows during cutscenes or loading
+screens would otherwise drop boost and SMU limits and stutter the game
+on resume.
 
 On the original tuned system, the Steam watcher sample showed roughly 168 ms of CPU over about 65 seconds and around 6-7 MB resident memory. Treat this as an order-of-magnitude reference, not a guarantee across systems.
 

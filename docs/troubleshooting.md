@@ -46,6 +46,18 @@ On Wayland, log out and back in after installing a local extension.
 
 If the extension appears but still shows an older menu after updating files, log out and back in. GNOME Shell can keep the old extension module cached for the current Wayland session; disable/enable may not reload the JavaScript code.
 
+If you previously installed the early local UUID, disable it and enable
+the public UUID:
+
+```bash
+gnome-extensions disable elitebook-thermal-profile@matteopasseri.local
+gnome-extensions enable elitebook-thermal-profile@matteopasseri.github.io
+```
+
+If GNOME says the public UUID does not exist even though the files are in
+`~/.local/share/gnome-shell/extensions`, log out and back in first; the
+Shell extension registry is session-cached on Wayland.
+
 ## GNOME Stock Power Mode Still Appears
 
 On Fedora, the stock GNOME Power Mode quick setting may be provided by `tuned-ppd` instead of `power-profiles-daemon`.
@@ -56,7 +68,11 @@ If you want the EliteBook profile service to be the only power policy surface:
 sudo systemctl mask --now tuned-ppd.service
 ```
 
-Keep `tuned.service` running. The EliteBook profile script still uses `tuned-adm`.
+Keep `tuned.service` running. The EliteBook profile script still asks
+`tuned-adm` for the matching Fedora tuned profile, but that call is
+best-effort and has a 10 second timeout. If `tuned-adm` warns or hangs,
+the script continues with the direct EPP, boost, frequency, and RyzenAdj
+policy so the laptop does not stay in a half-applied power state.
 
 ## GNOME Button Asks For A Password
 

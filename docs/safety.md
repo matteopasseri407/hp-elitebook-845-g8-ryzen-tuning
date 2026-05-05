@@ -9,10 +9,17 @@ The shipped defaults target:
 - HP EliteBook 845 G8
 - AMD Ryzen 7 PRO 5850U
 
-The script checks DMI and CPU model before applying a profile. To override the guard, set:
+The script checks DMI and CPU model before applying a profile. To override the guard at runtime:
 
 ```bash
 sudo ELITEBOOK_THERMAL_FORCE=1 elitebook-thermal-profile ac
+```
+
+To install the systemd integration on different hardware, pass `--force`
+to the installer:
+
+```bash
+sudo ./scripts/install-fedora.sh --force
 ```
 
 Only do that when you have reviewed the profile values for your own hardware.

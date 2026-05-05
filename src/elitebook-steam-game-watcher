@@ -7,18 +7,29 @@ import sys
 import time
 from pathlib import Path
 
-PROFILE_SCRIPT = Path(os.environ.get("ELITEBOOK_PROFILE_SCRIPT", "/usr/local/sbin/elitebook-thermal-profile"))
-STATE_DIR = Path(os.environ.get("ELITEBOOK_THERMAL_STATE_DIR", "/run/elitebook-thermal-profile"))
+PROFILE_SCRIPT = Path(
+    os.environ.get(
+        "ELITEBOOK_PROFILE_SCRIPT", "/usr/local/sbin/elitebook-thermal-profile"
+    )
+)
+STATE_DIR = Path(
+    os.environ.get("ELITEBOOK_THERMAL_STATE_DIR", "/run/elitebook-thermal-profile")
+)
 PROFILE_STATE = STATE_DIR / "current"
 WATCHER_STATE = STATE_DIR / "steam-game-watcher"
 
-INTERVAL_AC = int(os.environ.get("ELITEBOOK_STEAM_WATCH_INTERVAL_AC", "60"))
+INTERVAL_AC = int(os.environ.get("ELITEBOOK_STEAM_WATCH_INTERVAL_AC", "30"))
 INTERVAL_BATTERY = int(os.environ.get("ELITEBOOK_STEAM_WATCH_INTERVAL_BATTERY", "120"))
-INTERVAL_WHILE_STEAM = int(os.environ.get("ELITEBOOK_STEAM_WATCH_INTERVAL_ACTIVE", "20"))
+INTERVAL_WHILE_STEAM = int(
+    os.environ.get("ELITEBOOK_STEAM_WATCH_INTERVAL_ACTIVE", "20")
+)
 LOW_BATTERY_THRESHOLD = int(os.environ.get("ELITEBOOK_LOW_BATTERY_THRESHOLD", "20"))
 
 ID_RE = re.compile(rb"^[1-9][0-9]*$")
 STEAM_ID_KEYS = (b"SteamGameId", b"SteamAppId", b"STEAM_COMPAT_APP_ID")
+
+# /proc/<pid>/comm is truncated to TASK_COMM_LEN-1 = 15 chars by the kernel.
+# Both sets below must use the truncated forms or matches will silently fail.
 STEAM_ROOT_COMMANDS = {
     "steam",
     "steamwebhelper",
@@ -26,15 +37,20 @@ STEAM_ROOT_COMMANDS = {
 IGNORED_COMMANDS = {
     "steam",
     "steamwebhelper",
-    "steam-runtime-launcher-service",
-    "pressure-vessel-adverb",
+    "steam-runtime-l",  # steam-runtime-launcher-service
+    "pressure-vessel",  # pressure-vessel-adverb / pressure-vessel-wrap
     "pv-bwrap",
 }
 
 
 def on_ac_power() -> bool:
     try:
-        return Path("/sys/class/power_supply/AC/online").read_text(encoding="utf-8").strip() == "1"
+        return (
+            Path("/sys/class/power_supply/AC/online")
+            .read_text(encoding="utf-8")
+            .strip()
+            == "1"
+        )
     except OSError:
         return True
 
@@ -79,20 +95,20 @@ def watcher_active() -> bool:
 
 def mark_active(game: dict[str, str]) -> None:
     STATE_DIR.mkdir(mode=0o755, exist_ok=True)
-    WATCHER_STATE.write_text(
-        "\n".join(
-            [
-                "active=1",
-                f"pid={game['pid']}",
-                f"comm={game['comm']}",
-                f"appid={game['appid']}",
-                f"updated={time.strftime('%Y-%m-%dT%H:%M:%S%z')}",
-                "",
-            ]
-        ),
-        encoding="utf-8",
+    payload = "\n".join(
+        [
+            "active=1",
+            f"pid={game['pid']}",
+            f"comm={game['comm']}",
+            f"appid={game['appid']}",
+            f"updated={time.strftime('%Y-%m-%dT%H:%M:%S%z')}",
+            "",
+        ]
     )
-    WATCHER_STATE.chmod(0o644)
+    tmp = WATCHER_STATE.parent / f"{WATCHER_STATE.name}.tmp.{os.getpid()}"
+    tmp.write_text(payload, encoding="utf-8")
+    tmp.chmod(0o644)
+    os.replace(tmp, WATCHER_STATE)
 
 
 def clear_active() -> None:
@@ -191,7 +207,9 @@ def find_steam_game() -> tuple[dict[str, str] | None, bool]:
 
 def apply_profile(profile: str) -> bool:
     env = os.environ.copy()
-    env["ELITEBOOK_PROFILE_SOURCE"] = "steam-game-watcher" if profile == "gaming" else "auto"
+    env["ELITEBOOK_PROFILE_SOURCE"] = (
+        "steam-game-watcher" if profile == "gaming" else "auto"
+    )
 
     result = subprocess.run(
         [str(PROFILE_SCRIPT), profile],
@@ -237,7 +255,11 @@ def check_once() -> bool:
         state = read_current_state()
         current = state.get("profile", "")
         source = state.get("source", "")
-        if current == "gaming" and source == "steam-game-watcher" and apply_profile("auto"):
+        if (
+            current == "gaming"
+            and source == "steam-game-watcher"
+            and apply_profile("auto")
+        ):
             print("Steam game ended; restored auto profile", flush=True)
         clear_active()
 

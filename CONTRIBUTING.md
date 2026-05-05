@@ -21,10 +21,24 @@ Avoid proposing higher limits without measurements. The point of this repository
 ## Coding Style
 
 - Shell scripts use `set -euo pipefail`
-- Python code stays dependency-free
+- Python code stays dependency-free and targets Python 3.10+
 - Keep root-facing scripts readable
 - Keep automation low impact on battery
 - Do not add passwordless polkit rules by default
+
+## CI
+
+GitHub Actions runs `shellcheck` on the bash scripts and `ruff check` /
+`ruff format --check` on the Python watchers. Run them locally before
+opening a PR:
+
+```bash
+shellcheck src/elitebook-thermal-profile scripts/*.sh \
+           system-sleep/elitebook-thermal-profile
+ruff check src/elitebook-idle-watcher src/elitebook-steam-game-watcher
+ruff format --check src/elitebook-idle-watcher \
+                    src/elitebook-steam-game-watcher
+```
 
 ## Privacy
 

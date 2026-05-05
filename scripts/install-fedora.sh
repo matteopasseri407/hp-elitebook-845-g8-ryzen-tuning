@@ -7,11 +7,22 @@ REPO_DIR="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 WITH_GNOME_EXTENSION=0
 ENABLE_STEAM_WATCHER=1
 ENABLE_IDLE_WATCHER=1
+FORCE_HARDWARE=0
 EXTENSION_UUID="elitebook-thermal-profile@matteopasseri.github.io"
+LEGACY_EXTENSION_UUID="elitebook-thermal-profile@matteopasseri.local"
+LEGACY_EXTENSION_DETECTED=0
 
 usage() {
   cat >&2 <<'EOF'
-Usage: sudo ./scripts/install-fedora.sh [--with-gnome-extension] [--without-steam-watcher] [--without-idle-watcher]
+Usage: sudo ./scripts/install-fedora.sh [options]
+
+Options:
+  --with-gnome-extension   Install the GNOME Shell panel indicator
+  --without-steam-watcher  Do not install or enable the Steam game watcher
+  --without-idle-watcher   Do not install or enable the idle overlay watcher
+  --force                  Skip the HP EliteBook 845 G8 / Ryzen 7 PRO 5850U
+                           hardware guard. Only use this if you have reviewed
+                           the profile values for your machine.
 
 Installs:
   /usr/local/sbin/elitebook-thermal-profile
@@ -39,6 +50,10 @@ while [[ $# -gt 0 ]]; do
       ENABLE_IDLE_WATCHER=0
       shift
       ;;
+    --force)
+      FORCE_HARDWARE=1
+      shift
+      ;;
     -h|--help)
       usage
       exit 0
@@ -52,6 +67,20 @@ done
 
 if [[ "${EUID}" -ne 0 ]]; then
   echo "Run this installer with sudo." >&2
+  exit 1
+fi
+
+missing_pkgs=()
+command -v python3   >/dev/null 2>&1 || missing_pkgs+=("python3")
+command -v tuned-adm >/dev/null 2>&1 || missing_pkgs+=("tuned")
+if [[ "$WITH_GNOME_EXTENSION" -eq 1 ]]; then
+  command -v pkexec >/dev/null 2>&1 || missing_pkgs+=("polkit")
+fi
+
+if [[ "${#missing_pkgs[@]}" -gt 0 ]]; then
+  echo "Missing required tools: ${missing_pkgs[*]}" >&2
+  echo "Install them first, for example:" >&2
+  echo "  sudo dnf install ${missing_pkgs[*]}" >&2
   exit 1
 fi
 
@@ -69,7 +98,13 @@ if [[ "$have_ryzenadj" -ne 1 ]] && ! command -v ryzenadj >/dev/null 2>&1; then
   exit 1
 fi
 
-"$REPO_DIR/src/elitebook-thermal-profile" --check-hardware >/dev/null
+if [[ "$FORCE_HARDWARE" -eq 1 ]]; then
+  echo "WARNING: --force is set. The HP EliteBook 845 G8 / Ryzen 7 PRO 5850U guard will be skipped." >&2
+  echo "Make sure the profile values in src/elitebook-thermal-profile are safe for this machine." >&2
+  ELITEBOOK_THERMAL_FORCE=1 "$REPO_DIR/src/elitebook-thermal-profile" --check-hardware >/dev/null || true
+else
+  "$REPO_DIR/src/elitebook-thermal-profile" --check-hardware >/dev/null
+fi
 
 install -D -m 0755 "$REPO_DIR/src/elitebook-thermal-profile" /usr/local/sbin/elitebook-thermal-profile
 install -D -m 0644 "$REPO_DIR/systemd/elitebook-thermal-profile.service" /etc/systemd/system/elitebook-thermal-profile.service
@@ -111,6 +146,8 @@ if [[ "$WITH_GNOME_EXTENSION" -eq 1 ]]; then
   target_group="$(id -gn "$target_user")"
   extension_src="$REPO_DIR/gnome-extension/$EXTENSION_UUID"
   extension_dest="$target_home/.local/share/gnome-shell/extensions/$EXTENSION_UUID"
+  legacy_extension_dest="$target_home/.local/share/gnome-shell/extensions/$LEGACY_EXTENSION_UUID"
+  [[ -d "$legacy_extension_dest" ]] && LEGACY_EXTENSION_DETECTED=1
 
   install -d -m 0755 -o "$target_user" -g "$target_group" \
     "$target_home/.local" \
@@ -147,7 +184,11 @@ cat /run/elitebook-thermal-profile/current 2>/dev/null || true
 
 if [[ "$WITH_GNOME_EXTENSION" -eq 1 ]]; then
   echo "GNOME extension installed. Enable it with:"
+  if [[ "$LEGACY_EXTENSION_DETECTED" -eq 1 ]]; then
+    echo "  gnome-extensions disable $LEGACY_EXTENSION_UUID"
+  fi
   echo "  gnome-extensions enable $EXTENSION_UUID"
+  echo "On Wayland, log out and back in after changing the extension UUID."
 fi
 
 if [[ "$ENABLE_STEAM_WATCHER" -ne 1 ]]; then

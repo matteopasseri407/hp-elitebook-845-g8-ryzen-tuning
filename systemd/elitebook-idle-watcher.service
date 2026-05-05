@@ -34,5 +34,22 @@ IOSchedulingClass=idle
 CPUQuota=2%
 MemoryMax=64M
 
+# Hardening. ProtectKernelTunables is intentionally left off because the
+# watcher writes EPP and frequency hints under /sys/devices/system/cpu.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/run/elitebook-thermal-profile
+ProtectHome=yes
+PrivateTmp=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RemoveIPC=yes
+
 [Install]
 WantedBy=multi-user.target
