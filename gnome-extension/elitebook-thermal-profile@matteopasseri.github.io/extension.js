@@ -16,36 +16,38 @@ const IDLE_STATE_FILE = '/run/elitebook-thermal-profile/idle-watcher';
 
 const PROFILES = {
     ac: {
-        label: 'AC',
+        label: 'Balanced',
         icon: 'bolt-symbolic.svg',
-        detail: '30 W burst, 18 W sustained, efficient EPP',
+        detail: 'default daily mode',
     },
     performance: {
-        label: 'Perf',
+        label: 'Performance',
         icon: 'bolt-symbolic.svg',
-        detail: '30 W burst, 18 W sustained, 90 C',
+        detail: 'snappy plugged-in mode',
     },
     gaming: {
         label: 'Gaming',
         icon: 'gamepad-symbolic.svg',
-        detail: '30 W burst, 23 W sustained, 92 C',
+        detail: 'more APU room',
     },
     battery: {
         label: 'Battery',
         icon: 'leaf-symbolic.svg',
-        detail: '30 W burst, 15 W sustained, 88 C',
+        detail: 'normal unplugged mode',
     },
     'battery-saver': {
-        label: 'Saver',
+        label: 'Battery Saver',
         icon: 'leaf-symbolic.svg',
-        detail: '15 W burst, 8 W sustained, boost off',
+        detail: 'low-battery guard',
     },
     cool: {
         label: 'Cool',
         icon: 'cool-symbolic.svg',
-        detail: '22 W burst, 12 W sustained, 85 C',
+        detail: 'quiet and cool',
     },
 };
+
+const PROFILE_ORDER = ['ac', 'performance', 'gaming', 'battery', 'battery-saver', 'cool'];
 
 class ThermalIndicator extends PanelMenu.Button {
     static {
@@ -79,7 +81,27 @@ class ThermalIndicator extends PanelMenu.Button {
     }
 
     _buildMenu() {
-        for (const profile of ['ac', 'performance', 'gaming', 'battery', 'battery-saver', 'cool']) {
+        this._modeItem = new PopupMenu.PopupMenuItem('', {reactive: false});
+        this.menu.addMenuItem(this._modeItem);
+
+        this._baseItem = new PopupMenu.PopupMenuItem('', {reactive: false});
+        this.menu.addMenuItem(this._baseItem);
+
+        this._idleItem = new PopupMenu.PopupMenuItem('', {reactive: false});
+        this.menu.addMenuItem(this._idleItem);
+
+        this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+
+        this._autoItem = new PopupMenu.PopupMenuItem('Return to Auto');
+        this._autoItem.connect('activate', () => this._applyProfile('auto'));
+        this.menu.addMenuItem(this._autoItem);
+
+        this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+
+        this._manualHeader = new PopupMenu.PopupMenuItem('Manual profiles', {reactive: false});
+        this.menu.addMenuItem(this._manualHeader);
+
+        for (const profile of PROFILE_ORDER) {
             const data = PROFILES[profile];
             const item = new PopupMenu.PopupImageMenuItem(
                 data.label,
@@ -91,15 +113,6 @@ class ThermalIndicator extends PanelMenu.Button {
             this._items[profile] = item;
             this.menu.addMenuItem(item);
         }
-
-        this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
-
-        const autoItem = new PopupMenu.PopupMenuItem('Auto from power state');
-        autoItem.connect('activate', () => this._applyProfile('auto'));
-        this.menu.addMenuItem(autoItem);
-
-        this._statusItem = new PopupMenu.PopupMenuItem('', {reactive: false});
-        this.menu.addMenuItem(this._statusItem);
 
         this.menu.connect('open-state-changed', (_menu, isOpen) => {
             if (isOpen)
@@ -139,13 +152,41 @@ class ThermalIndicator extends PanelMenu.Button {
         return this._readKeyValueFile(IDLE_STATE_FILE);
     }
 
+    _sourceLabel(source) {
+        switch (source) {
+        case 'manual':
+            return 'Manual';
+        case 'steam-game-watcher':
+            return 'Steam';
+        case 'system-auto':
+        case 'auto':
+            return 'Auto';
+        default:
+            return source ? source : 'Unknown';
+        }
+    }
+
+    _idleLabel(idleState) {
+        if (idleState?.active !== '1')
+            return 'Off';
+
+        if (idleState.stage === 'deep')
+            return 'Deep - maximum idle saving';
+
+        return 'Soft - responsive saving';
+    }
+
     _refresh() {
         const state = this._readState();
         const idleState = this._readIdleState();
         const profile = state?.profile in PROFILES ? state.profile : 'ac';
         const idleActive = idleState?.active === '1';
+        const idleStage = idleState?.stage ?? '';
+        const effectiveIconProfile = idleActive && idleStage === 'deep'
+            ? 'battery-saver'
+            : profile;
         this._profile = profile;
-        this._icon.gicon = this._iconFor(profile);
+        this._icon.gicon = this._iconFor(effectiveIconProfile);
 
         for (const [name, item] of Object.entries(this._items)) {
             item.setOrnament(name === profile
@@ -153,15 +194,15 @@ class ThermalIndicator extends PanelMenu.Button {
                 : PopupMenu.Ornament.NONE);
         }
 
+        const source = state?.source ?? '';
         const data = PROFILES[profile];
-        if (idleActive) {
-            const stage = idleState.stage === 'deep' ? 'deep idle' : 'soft idle';
-            this._statusItem.label.text = `${data.label}: ${stage}, ${idleState.epp ?? 'power'} EPP`;
-            this.accessible_name = `EliteBook thermal profile: ${data.label}, ${stage}`;
-        } else {
-            this._statusItem.label.text = `${data.label}: ${data.detail}`;
-            this.accessible_name = `EliteBook thermal profile: ${data.label}`;
-        }
+        this._modeItem.label.text = `Control: ${this._sourceLabel(source)}`;
+        this._baseItem.label.text = `Base profile: ${data.label} - ${data.detail}`;
+        this._idleItem.label.text = `Idle overlay: ${this._idleLabel(idleState)}`;
+        this._autoItem.setOrnament(source === 'manual'
+            ? PopupMenu.Ornament.NONE
+            : PopupMenu.Ornament.CHECK);
+        this.accessible_name = `EliteBook power: ${data.label}, idle ${this._idleLabel(idleState)}`;
     }
 
     _applyProfile(profile) {
@@ -177,21 +218,21 @@ class ThermalIndicator extends PanelMenu.Button {
                     if (proc.get_successful()) {
                         this._refresh();
                         Main.notify(
-                            'EliteBook Thermal Profile',
+                            'EliteBook Power',
                             stdout.trim().split('\n').pop() ?? 'Profile applied.',
                         );
                     } else {
                         Main.notifyError(
-                            'EliteBook Thermal Profile',
+                            'EliteBook Power',
                             stderr.trim() || 'Profile switch failed.',
                         );
                     }
                 } catch (error) {
-                    Main.notifyError('EliteBook Thermal Profile', error.message);
+                    Main.notifyError('EliteBook Power', error.message);
                 }
             });
         } catch (error) {
-            Main.notifyError('EliteBook Thermal Profile', error.message);
+            Main.notifyError('EliteBook Power', error.message);
         }
     }
 

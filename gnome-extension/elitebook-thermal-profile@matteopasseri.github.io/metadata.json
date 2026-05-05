@@ -1,8 +1,8 @@
 {
   "uuid": "elitebook-thermal-profile@matteopasseri.github.io",
-  "name": "EliteBook Thermal Profile",
-  "description": "Panel switcher for HP EliteBook Ryzen thermal profiles.",
+  "name": "EliteBook Power",
+  "description": "Panel switcher for HP EliteBook Ryzen power profiles and idle overlay.",
   "url": "https://github.com/matteopasseri407/hp-elitebook-845-g8-ryzen-tuning",
   "shell-version": ["45", "46", "47", "48", "49", "50"],
-  "version": 3
+  "version": 4
 }
