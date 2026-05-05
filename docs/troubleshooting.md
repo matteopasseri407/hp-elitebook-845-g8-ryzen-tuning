@@ -44,6 +44,20 @@ gnome-extensions enable elitebook-thermal-profile@matteopasseri.github.io
 
 On Wayland, log out and back in after installing a local extension.
 
+If the extension appears but still shows an older menu after updating files, log out and back in. GNOME Shell can keep the old extension module cached for the current Wayland session; disable/enable may not reload the JavaScript code.
+
+## GNOME Stock Power Mode Still Appears
+
+On Fedora, the stock GNOME Power Mode quick setting may be provided by `tuned-ppd` instead of `power-profiles-daemon`.
+
+If you want the EliteBook profile service to be the only power policy surface:
+
+```bash
+sudo systemctl mask --now tuned-ppd.service
+```
+
+Keep `tuned.service` running. The EliteBook profile script still uses `tuned-adm`.
+
 ## GNOME Button Asks For A Password
 
 That is expected. The extension uses `pkexec` to run the profile switcher as root. This repository does not install a passwordless polkit rule by default.

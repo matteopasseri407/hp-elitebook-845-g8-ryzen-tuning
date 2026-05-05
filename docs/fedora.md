@@ -45,6 +45,25 @@ gnome-extensions enable elitebook-thermal-profile@matteopasseri.github.io
 
 Log out and back in if GNOME Shell does not load the extension immediately.
 
+On Wayland, GNOME Shell can keep an already-loaded extension module cached even after copying a newer `extension.js`. If the menu still shows the previous UI after an update, log out and back in. A simple disable/enable cycle may not be enough.
+
+## GNOME Stock Power Mode
+
+Fedora may expose the stock GNOME Power Mode quick setting through `tuned-ppd`, even when `power-profiles-daemon` is not installed. This repository keeps `tuned` as the tuning backend, but the extra GNOME Power Mode selector can become confusing because the EliteBook profile service is already managing EPP, RyzenAdj limits, and the idle overlay.
+
+To remove that stock GNOME selector while keeping `tuned` active:
+
+```bash
+sudo systemctl mask --now tuned-ppd.service
+```
+
+To restore it:
+
+```bash
+sudo systemctl unmask tuned-ppd.service
+sudo systemctl enable --now tuned-ppd.service
+```
+
 ## Service Checks
 
 ```bash
