@@ -1,0 +1,24 @@
+[Unit]
+Description=Verify and repair EliteBook thermal profile guardrails
+Documentation=https://github.com/matteopasseri407/hp-elitebook-845-g8-ryzen-tuning
+After=multi-user.target tuned.service
+Wants=tuned.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/elitebook-power-guard repair
+TimeoutStartSec=90s
+
+# This service intentionally keeps write access to the host system because its
+# job is to remask conflicting power profile units after package changes.
+NoNewPrivileges=yes
+ProtectHome=yes
+PrivateTmp=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes

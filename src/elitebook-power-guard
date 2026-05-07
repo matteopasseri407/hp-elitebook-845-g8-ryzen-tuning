@@ -1,0 +1,391 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+set -euo pipefail
+
+STATE_DIR="${ELITEBOOK_THERMAL_STATE_DIR:-/run/elitebook-thermal-profile}"
+GUARD_STATE_FILE="$STATE_DIR/guard"
+POWER_SUPPLY_DIR="${ELITEBOOK_POWER_SUPPLY_DIR:-/sys/class/power_supply}"
+THERMAL_PROFILE="${ELITEBOOK_THERMAL_PROFILE_BIN:-/usr/local/sbin/elitebook-thermal-profile}"
+UDEV_RULE="/etc/udev/rules.d/90-elitebook-thermal-profile.rules"
+SLEEP_HOOK="/etc/systemd/system-sleep/elitebook-thermal-profile"
+MODE="${1:-repair}"
+
+MASKED_UNITS=(
+  tuned-ppd.service
+  power-profiles-daemon.service
+)
+
+ENABLED_UNITS=(
+  elitebook-thermal-profile.service
+)
+
+WATCHER_UNITS=(
+  elitebook-idle-watcher.service
+  elitebook-steam-game-watcher.service
+)
+
+issues=()
+changed=0
+
+usage() {
+  cat >&2 <<'EOF'
+Usage: elitebook-power-guard [check|repair]
+
+check   Verify guardrails and exit non-zero if anything is wrong.
+repair  Reapply safe guardrails, start missing services, and reapply auto.
+
+This guard intentionally does not pin kernels or block Fedora package updates.
+It only repairs the local invariants needed by the EliteBook thermal profiles.
+EOF
+}
+
+log() {
+  printf 'elitebook-power-guard: %s\n' "$*"
+}
+
+warn() {
+  issues+=("$*")
+  log "WARN: $*"
+}
+
+read_trimmed() {
+  local path="$1"
+  [[ -r "$path" ]] || return 1
+  tr -d '\0' <"$path" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//'
+}
+
+on_ac_power() {
+  local online supply type
+
+  if [[ -r "$POWER_SUPPLY_DIR/AC/online" ]]; then
+    online="$(read_trimmed "$POWER_SUPPLY_DIR/AC/online" || true)"
+    [[ "$online" = "1" ]]
+    return
+  fi
+
+  for supply in "$POWER_SUPPLY_DIR"/*; do
+    [[ -r "$supply/type" ]] || continue
+    type="$(read_trimmed "$supply/type" || true)"
+    [[ "$type" = "Mains" ]] || continue
+    [[ -r "$supply/online" ]] || continue
+    online="$(read_trimmed "$supply/online" || true)"
+    [[ "$online" = "1" ]]
+    return
+  done
+
+  return 1
+}
+
+find_ryzenadj() {
+  local candidate
+
+  for candidate in /usr/local/sbin/ryzenadj /usr/local/bin/ryzenadj /usr/bin/ryzenadj; do
+    if [[ -x "$candidate" ]]; then
+      echo "$candidate"
+      return 0
+    fi
+  done
+
+  if command -v ryzenadj >/dev/null 2>&1; then
+    command -v ryzenadj
+    return 0
+  fi
+
+  return 1
+}
+
+unit_exists() {
+  systemctl cat "$1" >/dev/null 2>&1
+}
+
+unit_enabled_state() {
+  systemctl is-enabled "$1" 2>/dev/null || true
+}
+
+unit_active_state() {
+  systemctl is-active "$1" 2>/dev/null || true
+}
+
+write_guard_state() {
+  local status="$1"
+  local tmp
+
+  install -d -m 0755 "$STATE_DIR"
+  tmp="$(mktemp "$STATE_DIR/guard.tmp.XXXXXX")"
+  {
+    printf 'status=%s\n' "$status"
+    printf 'mode=%s\n' "$MODE"
+    printf 'issues=%s\n' "${#issues[@]}"
+    printf 'changed=%s\n' "$changed"
+    printf 'updated=%s\n' "$(date --iso-8601=seconds)"
+    if ((${#issues[@]} > 0)); then
+      printf 'details='
+      printf '%s' "${issues[0]}"
+      printf '\n'
+    fi
+  } >"$tmp"
+  chmod 0644 "$tmp"
+  mv -f "$tmp" "$GUARD_STATE_FILE"
+}
+
+ensure_masked_units() {
+  local state unit
+
+  for unit in "${MASKED_UNITS[@]}"; do
+    state="$(unit_enabled_state "$unit")"
+    if [[ "$state" = "masked" ]]; then
+      continue
+    fi
+
+    if [[ "$MODE" = "check" ]]; then
+      warn "$unit is not masked"
+      continue
+    fi
+
+    if systemctl mask --now "$unit" >/dev/null 2>&1; then
+      log "masked $unit"
+      changed=1
+    else
+      warn "failed to mask $unit"
+    fi
+  done
+}
+
+ensure_tuned() {
+  local state
+
+  if ! unit_exists tuned.service; then
+    warn "tuned.service is missing"
+    return
+  fi
+
+  state="$(unit_enabled_state tuned.service)"
+  if [[ "$state" != "enabled" ]]; then
+    if [[ "$MODE" = "check" ]]; then
+      warn "tuned.service is not enabled"
+    elif systemctl enable tuned.service >/dev/null 2>&1; then
+      log "enabled tuned.service"
+      changed=1
+    else
+      warn "failed to enable tuned.service"
+    fi
+  fi
+
+  state="$(unit_active_state tuned.service)"
+  if [[ "$state" != "active" ]]; then
+    if [[ "$MODE" = "check" ]]; then
+      warn "tuned.service is not active"
+    elif systemctl start tuned.service >/dev/null 2>&1; then
+      log "started tuned.service"
+      changed=1
+    else
+      warn "failed to start tuned.service"
+    fi
+  fi
+}
+
+ensure_enabled_units() {
+  local state unit
+
+  for unit in "${ENABLED_UNITS[@]}"; do
+    if ! unit_exists "$unit"; then
+      warn "$unit is missing"
+      continue
+    fi
+
+    state="$(unit_enabled_state "$unit")"
+    if [[ "$state" = "enabled" ]]; then
+      continue
+    fi
+
+    if [[ "$MODE" = "check" ]]; then
+      warn "$unit is not enabled"
+    elif systemctl enable "$unit" >/dev/null 2>&1; then
+      log "enabled $unit"
+      changed=1
+    else
+      warn "failed to enable $unit"
+    fi
+  done
+}
+
+ensure_watchers_active() {
+  local state unit
+
+  for unit in "${WATCHER_UNITS[@]}"; do
+    unit_exists "$unit" || continue
+
+    state="$(unit_enabled_state "$unit")"
+    if [[ "$state" != "enabled" ]]; then
+      if [[ "$MODE" = "check" ]]; then
+        warn "$unit is installed but not enabled"
+      elif systemctl enable "$unit" >/dev/null 2>&1; then
+        log "enabled $unit"
+        changed=1
+      else
+        warn "failed to enable $unit"
+      fi
+    fi
+
+    state="$(unit_active_state "$unit")"
+    if [[ "$state" = "active" ]]; then
+      continue
+    fi
+
+    if [[ "$MODE" = "check" ]]; then
+      warn "$unit is not active"
+    elif systemctl start "$unit" >/dev/null 2>&1; then
+      log "started $unit"
+      changed=1
+    else
+      warn "failed to start $unit"
+    fi
+  done
+}
+
+check_static_files() {
+  [[ -x "$THERMAL_PROFILE" ]] || warn "$THERMAL_PROFILE is missing or not executable"
+  [[ -f "$UDEV_RULE" ]] || warn "$UDEV_RULE is missing"
+  [[ -x "$SLEEP_HOOK" ]] || warn "$SLEEP_HOOK is missing or not executable"
+  find_ryzenadj >/dev/null || warn "RyzenAdj is missing from /usr/local/sbin, /usr/local/bin, and /usr/bin"
+}
+
+check_hardware_guard() {
+  if [[ ! -x "$THERMAL_PROFILE" ]]; then
+    return
+  fi
+
+  if ! "$THERMAL_PROFILE" --check-hardware >/dev/null 2>&1; then
+    warn "hardware guard failed; this machine no longer matches the supported EliteBook profile"
+  fi
+}
+
+check_cpufreq_shape() {
+  local drivers epp_missing=0 policy
+
+  if ! compgen -G "/sys/devices/system/cpu/cpufreq/policy*" >/dev/null; then
+    warn "cpufreq policy sysfs is missing"
+    return
+  fi
+
+  drivers="$(for policy in /sys/devices/system/cpu/cpufreq/policy*; do
+    [[ -r "$policy/scaling_driver" ]] && read_trimmed "$policy/scaling_driver"
+  done | sort -u | paste -sd, -)"
+
+  if [[ "$drivers" != *"amd-pstate-epp"* ]]; then
+    warn "expected amd-pstate-epp cpufreq driver, found '${drivers:-unknown}'"
+  fi
+
+  for policy in /sys/devices/system/cpu/cpufreq/policy*; do
+    if [[ ! -w "$policy/energy_performance_preference" ]]; then
+      epp_missing=1
+      break
+    fi
+  done
+
+  if [[ "$epp_missing" -eq 1 ]]; then
+    warn "one or more cpufreq policies lack writable energy_performance_preference"
+  fi
+}
+
+reload_udev_rules() {
+  [[ "$MODE" = "repair" ]] || return 0
+  [[ -f "$UDEV_RULE" ]] || return
+
+  if udevadm control --reload-rules >/dev/null 2>&1; then
+    log "reloaded udev rules"
+  else
+    warn "failed to reload udev rules"
+  fi
+}
+
+apply_sysfs_fallback() {
+  local boost epp label max_freq policy
+
+  if on_ac_power; then
+    label="ac-fallback"
+    boost=1
+    epp="balance_power"
+    max_freq=3000000
+  else
+    label="battery-fallback"
+    boost=0
+    epp="power"
+    max_freq=1800000
+  fi
+
+  log "applying $label direct sysfs fallback"
+
+  if [[ -w /sys/devices/system/cpu/cpufreq/boost ]]; then
+    echo "$boost" >/sys/devices/system/cpu/cpufreq/boost
+  fi
+
+  for policy in /sys/devices/system/cpu/cpufreq/policy*; do
+    [[ -d "$policy" ]] || continue
+    [[ -w "$policy/scaling_max_freq" ]] && echo "$max_freq" >"$policy/scaling_max_freq"
+    [[ -w "$policy/energy_performance_preference" ]] && echo "$epp" >"$policy/energy_performance_preference"
+  done
+
+  install -d -m 0755 "$STATE_DIR"
+  {
+    printf 'profile=%s\n' "$label"
+    printf 'source=guard-fallback\n'
+    printf 'epp=%s\n' "$epp"
+    printf 'boost=%s\n' "$([[ "$boost" = "1" ]] && echo on || echo off)"
+    printf 'max_freq=%s\n' "$max_freq"
+    printf 'updated=%s\n' "$(date --iso-8601=seconds)"
+  } >"$STATE_DIR/fallback"
+}
+
+apply_auto_profile() {
+  [[ "$MODE" = "repair" ]] || return 0
+
+  if unit_exists elitebook-thermal-profile.service; then
+    if timeout 60s systemctl start elitebook-thermal-profile.service >/dev/null 2>&1; then
+      log "reapplied elitebook-thermal-profile.service"
+      return
+    fi
+  elif [[ -x "$THERMAL_PROFILE" ]]; then
+    if timeout 60s env ELITEBOOK_PROFILE_SOURCE=system-auto "$THERMAL_PROFILE" auto >/dev/null 2>&1; then
+      log "reapplied elitebook thermal profile directly"
+      return
+    fi
+  fi
+
+  warn "failed to reapply the EliteBook thermal profile"
+  apply_sysfs_fallback
+}
+
+main() {
+  case "$MODE" in
+    check|repair)
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      usage
+      exit 2
+      ;;
+  esac
+
+  ensure_masked_units
+  ensure_tuned
+  ensure_enabled_units
+  check_static_files
+  check_hardware_guard
+  check_cpufreq_shape
+  reload_udev_rules
+  apply_auto_profile
+  ensure_watchers_active
+
+  if ((${#issues[@]} > 0)); then
+    write_guard_state degraded
+    exit 1
+  fi
+
+  write_guard_state ok
+}
+
+main "$@"

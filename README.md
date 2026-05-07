@@ -37,6 +37,7 @@ There is no `stock` profile. On the tested unit, the stock firmware/SMU behavior
 - system sleep hook: reapplies `auto` after resume
 - idle overlay watcher: applies soft/deep idle hints with near-zero polling overhead
 - Steam game watcher: switches to `gaming` only while a real Steam game process is detected
+- update guard timer: remasks conflicting GNOME power profile backends, keeps the custom units enabled, and reapplies `auto` after package/kernel changes without pinning updates
 - optional GNOME Shell panel indicator: three human actions (`Auto`, `Game`, `Quiet`) while automatic `ac`, `battery`, `battery-saver`, and idle states remain status-only
 
 The idle watcher is intentionally cheap. It samples aggregate `/proc/stat` and `/proc/loadavg` once per second, does not scan processes, and calls RyzenAdj only when entering or leaving deep idle. The Steam watcher scans `/proc` only on long intervals and is constrained with low scheduling priority, `CPUQuota=2%`, and `MemoryMax=64M`.
@@ -74,6 +75,12 @@ To skip the idle overlay watcher:
 
 ```bash
 sudo ./scripts/install-fedora.sh --without-idle-watcher
+```
+
+To skip the update guard timer:
+
+```bash
+sudo ./scripts/install-fedora.sh --without-power-guard
 ```
 
 To install on a different laptop after reviewing the profile values:
@@ -121,7 +128,20 @@ Current state is exposed at:
 ```bash
 cat /run/elitebook-thermal-profile/current
 cat /run/elitebook-thermal-profile/idle-watcher
+cat /run/elitebook-thermal-profile/guard
 ```
+
+## Update Guard
+
+`elitebook-power-guard.timer` runs after boot and then periodically. It is deliberately conservative: it does not versionlock Fedora packages, pin kernels, or block upgrades. Instead it repairs the invariants this project owns:
+
+- `tuned-ppd.service` and `power-profiles-daemon.service` stay masked so GNOME's stock Power Mode backend cannot take over EPP policy
+- `elitebook-thermal-profile`, idle watcher, and Steam watcher stay enabled
+- udev power-supply rules are reloaded
+- hardware, RyzenAdj presence, and `amd-pstate-epp` sysfs shape are checked
+- `auto` is reapplied with `ELITEBOOK_PROFILE_SOURCE=system-auto`, so manual overrides are preserved except for the low-battery `battery-saver` guard
+
+If the full RyzenAdj profile cannot be applied after an update, the guard writes `/run/elitebook-thermal-profile/fallback` and applies a direct sysfs fallback: conservative EPP/frequency on battery, or a moderate 3.0 GHz cap on AC. That fallback is meant to preserve thermals and battery until the RyzenAdj/kernel issue is fixed, not as a normal operating mode.
 
 ## Uninstall
 

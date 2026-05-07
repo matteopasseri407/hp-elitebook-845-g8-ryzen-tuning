@@ -38,6 +38,12 @@ Without the idle overlay watcher:
 sudo ./scripts/install-fedora.sh --without-idle-watcher
 ```
 
+Without the update guard timer:
+
+```bash
+sudo ./scripts/install-fedora.sh --without-power-guard
+```
+
 With the GNOME Shell indicator:
 
 ```bash
@@ -66,14 +72,20 @@ sudo systemctl unmask tuned-ppd.service
 sudo systemctl enable --now tuned-ppd.service
 ```
 
+The default Fedora install also enables `elitebook-power-guard.timer`. The timer
+keeps `tuned-ppd.service` and `power-profiles-daemon.service` masked after future
+package changes, but it does not pin Fedora packages or block kernel updates.
+
 ## Service Checks
 
 ```bash
 systemctl status elitebook-thermal-profile.service
 systemctl status elitebook-idle-watcher.service
 systemctl status elitebook-steam-game-watcher.service
+systemctl status elitebook-power-guard.timer
 cat /run/elitebook-thermal-profile/current
 cat /run/elitebook-thermal-profile/idle-watcher
+cat /run/elitebook-thermal-profile/guard
 ```
 
 The idle watcher is a staged overlay, not a profile replacement. Soft idle starts after a few quiet seconds with low-power EPP and no frequency cap. Deep idle starts only after longer quiet, then disables boost and uses a temporary low max frequency. Any real CPU load restores the current `ac`, `battery`, `gaming`, or manual profile.
