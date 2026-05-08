@@ -290,8 +290,15 @@ case "$profile" in
 esac
 
 if command -v tuned-adm >/dev/null 2>&1; then
-  if ! "${SUDO[@]}" timeout 10s tuned-adm profile "$tuned_profile" >/dev/null; then
-    echo "elitebook-thermal-profile: warning: tuned-adm did not apply '$tuned_profile'; continuing with direct CPU/SMU policy." >&2
+  current_tuned_profile=""
+  if [[ -r /etc/tuned/active_profile ]]; then
+    current_tuned_profile="$(read_trimmed /etc/tuned/active_profile)"
+  fi
+
+  if [[ "$current_tuned_profile" != "$tuned_profile" ]]; then
+    if ! "${SUDO[@]}" timeout 10s tuned-adm profile "$tuned_profile" >/dev/null; then
+      echo "elitebook-thermal-profile: warning: tuned-adm did not apply '$tuned_profile'; continuing with direct CPU/SMU policy." >&2
+    fi
   fi
 fi
 
