@@ -207,6 +207,34 @@ sudo ./scripts/install-fedora.sh --uninstall --gnome-extension
 
 Uninstall stops and disables the `elitebook-*` units, removes installed binaries, removes the udev rule and sleep hook, unmasks Fedora's stock power profile services, and restores `tuned-adm profile balanced`.
 
+## Related Work
+
+This project does not invent the category of Linux Ryzen power tuning. It builds on existing tools and adds the integration layers needed to run them as a daily driver on an HP business Cezanne laptop.
+
+Prior art and dependencies:
+
+- **[RyzenAdj](https://github.com/FlyGoat/RyzenAdj)** by FlyGoat. The CLI used to write SMU power limits on AMD Ryzen mobile parts. Pinned, SHA256-verified, and optionally built from source by the installer. Not vendored, not forked. Every SMU limit applied by the profiles in this repository goes through RyzenAdj.
+- **`ryzen-ppd`** by xsmile. A Python daemon that switches RyzenAdj profiles on AC/battery transitions. This repository covers the same need with a systemd/udev approach, plus the additional layers below.
+- **`ryzenadj-control`** by h4us0x. A PyQt6 GUI for sending RyzenAdj commands manually. Complementary scope: this project is service-driven, not a manual cockpit.
+- **`SimpleDeckyTDP`**. A Decky plugin focused on the Steam Deck. Same SMU mechanism, different ecosystem and target hardware.
+- **`auto-power-profile`**. Switches `power-profiles-daemon` profiles based on CPU usage. Operates one layer above SMU; this project's update guard intentionally remasks `power-profiles-daemon` so the two do not fight over EPP policy.
+
+What this repository adds on top of those building blocks, integrated for HP business Cezanne laptops as a daily driver:
+
+- udev-driven AC/battery profile switching, not a polling daemon
+- a two-stage idle overlay watcher that respects stricter base profiles such as `battery-saver`
+- a Steam game watcher that scans `/proc` rarely and exits cleanly when no game is running
+- an update guard timer that reapplies profile invariants after `dnf upgrade`, including remasking `tuned-ppd` and `power-profiles-daemon`
+- a hibernate preflight check that validates swap layout, lockdown, and SELinux state before allowing hibernation
+- a native GNOME Shell extension exposing only three meaningful daily actions (`Auto`, `Game`, `Quiet`)
+- hardened systemd sandboxes with `CapabilityBoundingSet`, `SystemCallFilter`, `MemoryDenyWriteExecute`, `PrivateNetwork`, `ProtectSystem=strict`, and related directives applied to every long-running unit
+
+Framing notes:
+
+- This is userland integration on top of RyzenAdj and AMD P-State. It is not a kernel project and does not modify Ryzen firmware behavior.
+- Where another project already owns a layer (RyzenAdj for SMU writes, AMD P-State for EPP, GNOME for power UI), this repository delegates to it.
+- Development was AI-assisted using Codex and Claude. Profile values, the hardware whitelist, and runtime behavior were validated on real hardware on Fedora.
+
 ## Threat Model & Limits
 
 This project does:
