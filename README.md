@@ -18,6 +18,19 @@ Tested on:
 
 This is intentionally hardware-scoped. The main script refuses to run on unrecognized hardware unless `ELITEBOOK_THERMAL_FORCE=1` is set.
 
+## Quickstart
+
+For Fedora users with a supported HP business Cezanne laptop:
+
+```bash
+sudo dnf install tuned python3 polkit
+git clone https://github.com/matteopasseri407/hp-elitebook-845-g8-ryzen-tuning.git
+cd hp-elitebook-845-g8-ryzen-tuning
+sudo ./scripts/install-fedora.sh
+```
+
+If `ryzenadj` is not packaged for your Fedora version, the installer can build a pinned, SHA256-verified source release with `--build-ryzenadj`. See [Supported Hardware](#supported-hardware) for the validated laptop list and [Install On Fedora](#install-on-fedora) for the optional flags (custom builds, GNOME extension, individual watcher opt-outs). Other distributions are not packaged yet — see [Related Work](#related-work) and the roadmap.
+
 ## Supported Hardware
 
 Validated by default:
@@ -36,6 +49,8 @@ Known but not enabled by default:
 | HP EliteBook 835/845 G9, HP ProBook 445/455 G9 | Ryzen 5/7 PRO 6650U, 6850U | Rembrandt detected, requires `ELITEBOOK_THERMAL_FORCE=1` after manual review |
 
 The project does not change SMU numbers per model yet. Every enabled model uses the same conservative Cezanne limits shown in the profiles table.
+
+If you run this on a supported HP business Cezanne variant other than the 845 G8 (for example 835 G7/G8/G9, 845 G7/G9, or ProBook 445/455 G8/G9) and it behaves correctly, please open a [Hardware Report](https://github.com/matteopasseri407/hp-elitebook-845-g8-ryzen-tuning/issues/new?template=hardware-report.md). Confirmed reports help grow the validated whitelist with real-world data instead of one machine.
 
 ## Profiles
 
