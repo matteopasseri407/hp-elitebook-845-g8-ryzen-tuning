@@ -21,7 +21,7 @@ Requires:       systemd
 Requires:       systemd-udev
 Requires:       tuned
 Requires:       util-linux-core
-Recommends:     ryzenadj
+Recommends:     ryzenadj >= 0.17.0
 Suggests:       gnome-shell-extension-elitebook-thermal-profile
 
 Requires(post):   systemd

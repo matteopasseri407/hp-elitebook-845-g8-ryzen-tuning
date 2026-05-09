@@ -11,11 +11,14 @@ The COPR-oriented RPM spec lives in this directory:
 
 ```bash
 packaging/rpm/elitebook-thermal-profile.spec
+packaging/rpm/ryzenadj.spec
 ```
 
-RyzenAdj is not vendored. The current spec treats RyzenAdj as a weak dependency
-and documents the sysfs-only fallback for EPP, boost, and CPU frequency when
-RyzenAdj is unavailable.
+RyzenAdj is not vendored into the EliteBook package. The COPR project builds a
+separate upstream `ryzenadj` package from FlyGoat `v0.17.0`, verifying the
+upstream tarball SHA256 in `%prep`. `elitebook-thermal-profile` weakly
+recommends `ryzenadj >= 0.17.0` and documents the sysfs-only fallback for EPP,
+boost, and CPU frequency when RyzenAdj is unavailable or blocked by lockdown.
 
 ## Package Layout
 
@@ -25,7 +28,7 @@ RyzenAdj is unavailable.
 - Install the system sleep hook under `/usr/lib/systemd/system-sleep/`
 - Package the GNOME Shell extension as the optional
   `gnome-shell-extension-elitebook-thermal-profile` subpackage
-- Do not vendor RyzenAdj; weakly recommend a packaged RyzenAdj when available
+- Package RyzenAdj separately; keep it upstream-owned and weakly recommended
 
 The spec patches packaged unit files, helper scripts, sleep hook, and GNOME
 extension away from the source installer's `/usr/local/sbin` paths. This keeps
@@ -48,6 +51,17 @@ copr-cli buildscm elitebook-thermal-profile \
   --clone-url https://github.com/matteopasseri407/hp-elitebook-845-g8-ryzen-tuning.git \
   --commit 95ee496816ef5bc160f603049ca0eba621f2bd21 \
   --spec packaging/rpm/elitebook-thermal-profile.spec \
+  --method rpkg \
+  -r fedora-44-x86_64
+```
+
+Build RyzenAdj from the same repository commit after the `ryzenadj.spec` change:
+
+```bash
+copr-cli buildscm elitebook-thermal-profile \
+  --clone-url https://github.com/matteopasseri407/hp-elitebook-845-g8-ryzen-tuning.git \
+  --commit <commit-containing-ryzenadj-spec> \
+  --spec packaging/rpm/ryzenadj.spec \
   --method rpkg \
   -r fedora-44-x86_64
 ```

@@ -15,6 +15,13 @@ sudo dnf copr enable matteo407/elitebook-thermal-profile
 sudo dnf install elitebook-thermal-profile
 ```
 
+With default DNF weak dependencies, the RPM install also pulls `ryzenadj` from
+the same COPR. If weak dependencies are disabled:
+
+```bash
+sudo dnf install elitebook-thermal-profile ryzenadj
+```
+
 Optional GNOME Shell indicator:
 
 ```bash
@@ -27,13 +34,19 @@ Source installer dependencies:
 sudo dnf install tuned python3 polkit lm_sensors
 ```
 
-RyzenAdj is not vendored here. Install it separately and make sure one of these works:
+RyzenAdj is not vendored into this repository, but it is packaged in the same
+COPR from upstream FlyGoat `v0.17.0`. Make sure one of these works before
+expecting full SMU power-limit control:
 
 ```bash
 /usr/local/sbin/ryzenadj -i
 /usr/local/bin/ryzenadj -i
 /usr/bin/ryzenadj -i
 ```
+
+If RyzenAdj is missing or blocked by Secure Boot/kernel lockdown, this project
+still applies the sysfs fallback controls for EPP, boost, and CPU max frequency.
+That fallback is useful, but it is not equivalent to full SMU tuning.
 
 ## Install From Source
 

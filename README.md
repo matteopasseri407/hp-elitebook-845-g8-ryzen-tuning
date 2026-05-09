@@ -28,6 +28,14 @@ sudo dnf copr enable matteo407/elitebook-thermal-profile
 sudo dnf install elitebook-thermal-profile
 ```
 
+The same COPR also packages RyzenAdj `v0.17.0`; with default DNF weak
+dependencies, installing `elitebook-thermal-profile` pulls it in automatically.
+If your system disables weak dependencies, install it explicitly:
+
+```bash
+sudo dnf install elitebook-thermal-profile ryzenadj
+```
+
 The RPM deliberately installs files only; it does not start hardware tuning
 during package installation. After reviewing the supported hardware table:
 
@@ -39,10 +47,10 @@ sudo systemctl enable --now elitebook-power-guard.timer
 sudo systemctl start elitebook-power-guard.service
 ```
 
-If `ryzenadj` is not packaged for your Fedora version, the source installer can
+If `ryzenadj` is unavailable on another distribution, the source installer can
 build a pinned, SHA256-verified RyzenAdj release with `--build-ryzenadj`.
-Without RyzenAdj, the RPM still degrades to sysfs controls for EPP, boost, and
-CPU frequency where the kernel exposes them. See [Supported Hardware](#supported-hardware)
+Without RyzenAdj, the system degrades to sysfs controls for EPP, boost, and CPU
+frequency where the kernel exposes them. See [Supported Hardware](#supported-hardware)
 before enabling services on any machine. Other distributions are not packaged
 yet; see [Related Work](#related-work) and the roadmap.
 
@@ -97,7 +105,7 @@ The idle watcher is intentionally cheap. It samples aggregate `/proc/stat` and `
 
 - Linux with systemd and udev
 - AMD P-State or cpufreq sysfs support
-- `ryzenadj` installed as `/usr/local/sbin/ryzenadj`, `/usr/local/bin/ryzenadj`, or `/usr/bin/ryzenadj`
+- `ryzenadj` installed as `/usr/local/sbin/ryzenadj`, `/usr/local/bin/ryzenadj`, or `/usr/bin/ryzenadj` for full SMU power-limit control
 - `tuned` recommended on Fedora
 - `pkexec` only if using the GNOME Shell switcher
 - `flock` from util-linux, normally installed by default on Fedora
@@ -105,13 +113,33 @@ The idle watcher is intentionally cheap. It samples aggregate `/proc/stat` and `
 
 Secure Boot commonly enables kernel lockdown. When lockdown is active, RyzenAdj may not be able to write SMU limits through `/dev/mem`; the installer warns and asks for confirmation before continuing. EPP, CPU max frequency, and boost sysfs controls still degrade cleanly.
 
-This repository does not vendor RyzenAdj. Install it from your distribution, COPR/AUR if available, from the upstream project, or let the Fedora installer build a pinned source release:
+### RyzenAdj And Fallback Mode
+
+This repository does not vendor RyzenAdj. Fedora users can install RyzenAdj from
+the same COPR:
+
+```bash
+sudo dnf copr enable matteo407/elitebook-thermal-profile
+sudo dnf install ryzenadj
+```
+
+The COPR package builds upstream FlyGoat RyzenAdj `v0.17.0` from source and
+verifies the same SHA256 used by the source installer. Users on other
+distributions can install RyzenAdj from their package source, upstream, or let
+the Fedora/source installer build the pinned release:
 
 ```bash
 sudo ./scripts/install-fedora.sh --build-ryzenadj
 ```
 
 The source-build path pins RyzenAdj `v0.17.0` at commit `67aa960e71bf4cdd140b47d42c0c62c4cded68d1` and verifies SHA256 `848ac9d86ff65d30f5e2c8600aac2613f0f10003b0d6f0e516a54761d7345d44` before compiling.
+
+When RyzenAdj works, profiles apply both kernel-level policy and SMU limits:
+EPP, boost, CPU max frequency, sustained package power, STAPM/fast/slow limits,
+and thermal targets. When RyzenAdj is missing or blocked by kernel lockdown,
+the runtime fallback still applies the kernel-level controls: EPP, boost, and
+CPU max frequency. That fallback is intentionally conservative; it is not a
+full replacement for SMU tuning.
 
 ## Install On Fedora
 
@@ -120,6 +148,12 @@ The source-build path pins RyzenAdj `v0.17.0` at commit `67aa960e71bf4cdd140b47d
 ```bash
 sudo dnf copr enable matteo407/elitebook-thermal-profile
 sudo dnf install elitebook-thermal-profile
+```
+
+If DNF weak dependencies are disabled:
+
+```bash
+sudo dnf install elitebook-thermal-profile ryzenadj
 ```
 
 Optional GNOME Shell indicator:

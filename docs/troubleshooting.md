@@ -5,6 +5,8 @@
 Install RyzenAdj or set the path explicitly:
 
 ```bash
+sudo dnf copr enable matteo407/elitebook-thermal-profile
+sudo dnf install ryzenadj
 sudo RYZENADJ=/path/to/ryzenadj elitebook-thermal-profile ac
 ```
 
@@ -14,6 +16,31 @@ The script searches:
 - `/usr/local/bin/ryzenadj`
 - `/usr/bin/ryzenadj`
 - `ryzenadj` in `PATH`
+
+On Fedora, the project COPR packages upstream FlyGoat RyzenAdj `v0.17.0`.
+On other distributions, install RyzenAdj from the distribution, upstream, or
+use the pinned source-build path from `scripts/install-fedora.sh`.
+
+## RyzenAdj Present But SMU Writes Fail
+
+Secure Boot can enable kernel lockdown. Under lockdown, RyzenAdj may start but
+fail to write SMU limits through `/dev/mem`.
+
+Check lockdown state:
+
+```bash
+cat /sys/kernel/security/lockdown
+```
+
+If lockdown is not `none`, full SMU tuning may be blocked. The EliteBook stack
+will still use sysfs fallback controls where available:
+
+- AMD P-State EPP
+- CPU boost on/off
+- CPU max frequency caps
+
+The fallback is conservative and keeps the machine usable, but it cannot apply
+the full sustained watt/temperature profile that RyzenAdj normally handles.
 
 ## Unsupported Hardware
 
