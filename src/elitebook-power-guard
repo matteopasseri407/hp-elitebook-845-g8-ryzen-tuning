@@ -305,7 +305,10 @@ apply_sysfs_fallback() {
 
   install -d -m 0755 "$STATE_DIR"
   exec 9>"$LOCK_FILE"
-  flock -x 9
+  if ! flock -w 10 -x 9; then
+    warn "could not acquire dispatcher lock within 10s for sysfs fallback"
+    return
+  fi
 
   if on_ac_power; then
     label="ac-fallback"

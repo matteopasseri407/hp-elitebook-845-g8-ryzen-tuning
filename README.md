@@ -1,6 +1,8 @@
-# HP EliteBook 845 G8 Ryzen Thermal Profiles
+# HP AMD Ryzen Thermal Profiles
 
-Thermal and power profiles for the HP EliteBook 845 G8 with the AMD Ryzen 7 PRO 5850U.
+Thermal and power profiles for selected HP EliteBook and ProBook AMD Ryzen laptops.
+
+The profile values are field-tested on an HP EliteBook 845 G8 with the AMD Ryzen 7 PRO 5850U. Other HP Cezanne models are accepted by the hardware guard only when they match the validated CPU family listed below. Rembrandt models are recognized but intentionally blocked by default until their SMU behavior is validated.
 
 The goal is not to hard-cap the CPU. The profiles keep boost enabled and leave the maximum CPU frequency uncapped for normal work, then tune the sustained SMU power limits and the AMD P-State energy preference so the laptop can still burst hard without sitting at the stock 100 C thermal edge during sustained workloads.
 
@@ -15,6 +17,25 @@ Tested on:
 - Linux 6.19 series and 7.0.4-200.fc44.x86_64
 
 This is intentionally hardware-scoped. The main script refuses to run on unrecognized hardware unless `ELITEBOOK_THERMAL_FORCE=1` is set.
+
+## Supported Hardware
+
+Validated by default:
+
+| DMI product family | CPU family | Status |
+| --- | --- | --- |
+| HP EliteBook 835 G7/G8/G9 | Ryzen 5/7 PRO 5650U, 5750U, 5850U | Cezanne profiles enabled |
+| HP EliteBook 845 G7/G8/G9 | Ryzen 5/7 PRO 5650U, 5750U, 5850U | Cezanne profiles enabled |
+| HP ProBook 445 G8/G9 | Ryzen 5/7 PRO 5650U, 5750U, 5850U | Cezanne profiles enabled |
+| HP ProBook 455 G8/G9 | Ryzen 5/7 PRO 5650U, 5750U, 5850U | Cezanne profiles enabled |
+
+Known but not enabled by default:
+
+| DMI product family | CPU family | Status |
+| --- | --- | --- |
+| HP EliteBook 835/845 G9, HP ProBook 445/455 G9 | Ryzen 5/7 PRO 6650U, 6850U | Rembrandt detected, requires `ELITEBOOK_THERMAL_FORCE=1` after manual review |
+
+The project does not change SMU numbers per model yet. Every enabled model uses the same conservative Cezanne limits shown in the profiles table.
 
 ## Profiles
 
@@ -50,8 +71,17 @@ The idle watcher is intentionally cheap. It samples aggregate `/proc/stat` and `
 - `tuned` recommended on Fedora
 - `pkexec` only if using the GNOME Shell switcher
 - `flock` from util-linux, normally installed by default on Fedora
+- Kernel lockdown set to `none` for full RyzenAdj SMU control through `/dev/mem`
 
-This repository does not vendor RyzenAdj. Install it from your distribution, COPR/AUR if available, or from the upstream project: <https://github.com/FlyGoat/RyzenAdj>
+Secure Boot commonly enables kernel lockdown. When lockdown is active, RyzenAdj may not be able to write SMU limits through `/dev/mem`; the installer warns and asks for confirmation before continuing. EPP, CPU max frequency, and boost sysfs controls still degrade cleanly.
+
+This repository does not vendor RyzenAdj. Install it from your distribution, COPR/AUR if available, from the upstream project, or let the Fedora installer build a pinned source release:
+
+```bash
+sudo ./scripts/install-fedora.sh --build-ryzenadj
+```
+
+The source-build path pins RyzenAdj `v0.17.0` at commit `67aa960e71bf4cdd140b47d42c0c62c4cded68d1` and verifies SHA256 `848ac9d86ff65d30f5e2c8600aac2613f0f10003b0d6f0e516a54761d7345d44` before compiling.
 
 ## Install On Fedora
 
@@ -88,6 +118,13 @@ To install on a different laptop after reviewing the profile values:
 
 ```bash
 sudo ./scripts/install-fedora.sh --force
+```
+
+To build a pinned RyzenAdj from source when no `ryzenadj` binary is installed:
+
+```bash
+sudo dnf install cmake gcc-c++ make pciutils-devel curl tar
+sudo ./scripts/install-fedora.sh --build-ryzenadj
 ```
 
 Optional GNOME Shell indicator:
@@ -147,14 +184,46 @@ If the full RyzenAdj profile cannot be applied after an update, the guard writes
 ## Uninstall
 
 ```bash
+sudo ./scripts/install-fedora.sh --uninstall
+```
+
+The compatibility wrapper still works:
+
+```bash
 sudo ./scripts/uninstall.sh
+```
+
+To keep a RyzenAdj binary installed by `--build-ryzenadj`:
+
+```bash
+sudo ./scripts/install-fedora.sh --uninstall --keep-ryzenadj
 ```
 
 To remove the optional GNOME extension as well:
 
 ```bash
-sudo ./scripts/uninstall.sh --gnome-extension
+sudo ./scripts/install-fedora.sh --uninstall --gnome-extension
 ```
+
+Uninstall stops and disables the `elitebook-*` units, removes installed binaries, removes the udev rule and sleep hook, unmasks Fedora's stock power profile services, and restores `tuned-adm profile balanced`.
+
+## Threat Model & Limits
+
+This project does:
+
+- Apply local thermal, EPP, boost, frequency, and SMU power-limit policy for supported HP AMD laptops
+- Reapply that policy after boot, AC/battery changes, resume, Steam game detection, idle transitions, and Fedora package updates
+- Fail closed on unknown hardware unless `ELITEBOOK_THERMAL_FORCE=1` is set
+- Provide an uninstall path that returns Fedora power management to the stock balanced baseline
+
+This project does not:
+
+- Bypass firmware thermal safety limits
+- Guarantee support for every Ryzen APU generation or OEM BIOS
+- Auto-update itself or download code in the background
+- Collect telemetry, analytics, hardware inventory, or usage data
+
+The main trust boundary is root execution on the local machine. Installer and runtime scripts write to systemd, udev, `/run`, CPU sysfs, and RyzenAdj-accessible SMU controls. Review `docs/safety.md` and the profile values before forcing unsupported hardware.
 
 ## Safety
 
@@ -164,6 +233,7 @@ Read [docs/safety.md](docs/safety.md) before adapting it to other machines.
 
 ## Roadmap
 
+- Consider renaming the public repository to `cezanne-thermal-profile` or `hp-amd-thermal-tuner` before a broader release. The current repository name is accurate for the original test laptop but too narrow for the validated Cezanne hardware table above.
 - Fedora COPR packaging once the RyzenAdj dependency path is clean
 - RPM spec cleanup for `/usr/libexec` and packaged systemd units
 - More test reports across BIOS versions
