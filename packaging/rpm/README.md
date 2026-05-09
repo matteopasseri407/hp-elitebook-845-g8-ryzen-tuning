@@ -60,7 +60,7 @@ Build RyzenAdj from the same repository commit after the `ryzenadj.spec` change:
 ```bash
 copr-cli buildscm elitebook-thermal-profile \
   --clone-url https://github.com/matteopasseri407/hp-elitebook-845-g8-ryzen-tuning.git \
-  --commit <commit-containing-ryzenadj-spec> \
+  --commit d9e2a2874a095e41b10dc109f5a0574903addfbd \
   --spec packaging/rpm/ryzenadj.spec \
   --method rpkg \
   -r fedora-44-x86_64
