@@ -1,6 +1,6 @@
 Name:           elitebook-thermal-profile
 Version:        0.2.0
-Release:        1%{?dist}
+Release:        2%{?dist}
 Summary:        Thermal and power profiles for HP AMD Cezanne laptops
 
 %global upstream_url https://github.com/matteopasseri407/hp-elitebook-845-g8-ryzen-tuning
@@ -156,5 +156,8 @@ fi
 %{_datadir}/gnome-shell/extensions/%{extension_uuid}/
 
 %changelog
+* Sat May 09 2026 Matteo Passeri <matteopasseri407@users.noreply.github.com> - 0.2.0-2
+- Recommend the packaged RyzenAdj 0.17.0 dependency from COPR
+
 * Sat May 09 2026 Matteo Passeri <matteopasseri407@users.noreply.github.com> - 0.2.0-1
 - Initial COPR-oriented Fedora RPM packaging
