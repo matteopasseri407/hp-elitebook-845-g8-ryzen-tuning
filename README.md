@@ -233,6 +233,7 @@ Read [docs/safety.md](docs/safety.md) before adapting it to other machines.
 
 ## Roadmap
 
+- Consider renaming the public repository to `cezanne-thermal-profile` or `hp-amd-thermal-tuner` before a broader release. The current repository name is accurate for the original test laptop but too narrow for the validated Cezanne hardware table above.
 - Fedora COPR packaging once the RyzenAdj dependency path is clean
 - RPM spec cleanup for `/usr/libexec` and packaged systemd units
 - More test reports across BIOS versions
