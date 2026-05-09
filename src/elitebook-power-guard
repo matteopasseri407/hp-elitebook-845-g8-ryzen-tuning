@@ -4,6 +4,7 @@ set -euo pipefail
 
 STATE_DIR="${ELITEBOOK_THERMAL_STATE_DIR:-/run/elitebook-thermal-profile}"
 GUARD_STATE_FILE="$STATE_DIR/guard"
+LOCK_FILE="$STATE_DIR/dispatcher.lock"
 POWER_SUPPLY_DIR="${ELITEBOOK_POWER_SUPPLY_DIR:-/sys/class/power_supply}"
 THERMAL_PROFILE="${ELITEBOOK_THERMAL_PROFILE_BIN:-/usr/local/sbin/elitebook-thermal-profile}"
 UDEV_RULE="/etc/udev/rules.d/90-elitebook-thermal-profile.rules"
@@ -301,6 +302,10 @@ reload_udev_rules() {
 
 apply_sysfs_fallback() {
   local boost epp label max_freq policy
+
+  install -d -m 0755 "$STATE_DIR"
+  exec 9>"$LOCK_FILE"
+  flock -x 9
 
   if on_ac_power; then
     label="ac-fallback"

@@ -40,7 +40,7 @@ There is no `stock` profile. On the tested unit, the stock firmware/SMU behavior
 - update guard timer: remasks conflicting GNOME power profile backends, keeps the custom units enabled, and reapplies `auto` after package/kernel changes without pinning updates
 - optional GNOME Shell panel indicator: three human actions (`Auto`, `Game`, `Quiet`) while automatic `ac`, `battery`, `battery-saver`, and idle states remain status-only
 
-The idle watcher is intentionally cheap. It samples aggregate `/proc/stat` and `/proc/loadavg` once per second, does not scan processes, and calls RyzenAdj only when entering or leaving deep idle. The Steam watcher scans `/proc` only on long intervals and is constrained with low scheduling priority, `CPUQuota=2%`, and `MemoryMax=64M`.
+The idle watcher is intentionally cheap. It samples aggregate `/proc/stat` and `/proc/loadavg` once per second, does not scan processes, preserves stricter base frequency caps such as `battery-saver`, and calls RyzenAdj only when entering or leaving deep idle. The Steam watcher scans `/proc` only on long intervals and is constrained with low scheduling priority, `CPUQuota=2%`, and `MemoryMax=64M`.
 
 ## Requirements
 
@@ -49,6 +49,7 @@ The idle watcher is intentionally cheap. It samples aggregate `/proc/stat` and `
 - `ryzenadj` installed as `/usr/local/sbin/ryzenadj`, `/usr/local/bin/ryzenadj`, or `/usr/bin/ryzenadj`
 - `tuned` recommended on Fedora
 - `pkexec` only if using the GNOME Shell switcher
+- `flock` from util-linux, normally installed by default on Fedora
 
 This repository does not vendor RyzenAdj. Install it from your distribution, COPR/AUR if available, or from the upstream project: <https://github.com/FlyGoat/RyzenAdj>
 

@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
+import fcntl
 import os
 import subprocess
 import sys
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
 STATE_DIR = Path(
@@ -11,12 +13,13 @@ STATE_DIR = Path(
 )
 PROFILE_STATE = STATE_DIR / "current"
 IDLE_STATE = STATE_DIR / "idle-watcher"
+DISPATCHER_LOCK = STATE_DIR / "dispatcher.lock"
 
 SAMPLE_INTERVAL = float(os.environ.get("ELITEBOOK_IDLE_SAMPLE_INTERVAL", "1"))
-SOFT_ENTER_SAMPLES = int(os.environ.get("ELITEBOOK_IDLE_SOFT_ENTER_SAMPLES", "3"))
+SOFT_ENTER_SAMPLES = int(os.environ.get("ELITEBOOK_IDLE_SOFT_ENTER_SAMPLES", "5"))
 DEEP_ENTER_SAMPLES = int(os.environ.get("ELITEBOOK_IDLE_DEEP_ENTER_SAMPLES", "30"))
-ENTER_BUSY_PERCENT = float(os.environ.get("ELITEBOOK_IDLE_ENTER_BUSY_PERCENT", "4.0"))
-EXIT_BUSY_PERCENT = float(os.environ.get("ELITEBOOK_IDLE_EXIT_BUSY_PERCENT", "6.0"))
+ENTER_BUSY_PERCENT = float(os.environ.get("ELITEBOOK_IDLE_ENTER_BUSY_PERCENT", "2.0"))
+EXIT_BUSY_PERCENT = float(os.environ.get("ELITEBOOK_IDLE_EXIT_BUSY_PERCENT", "8.0"))
 ENTER_LOAD1 = float(os.environ.get("ELITEBOOK_IDLE_ENTER_LOAD1", "1.2"))
 EXIT_LOAD1 = float(os.environ.get("ELITEBOOK_IDLE_EXIT_LOAD1", "1.6"))
 
@@ -74,6 +77,17 @@ def read_key_value_file(path: Path) -> dict[str, str]:
     except OSError:
         pass
     return state
+
+
+@contextmanager
+def dispatcher_lock():
+    STATE_DIR.mkdir(mode=0o755, exist_ok=True)
+    with DISPATCHER_LOCK.open("w", encoding="utf-8") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
 def read_profile_state() -> dict[str, str]:
@@ -240,6 +254,29 @@ def profile_state_is_complete(state: dict[str, str]) -> bool:
     return required.issubset(state.keys())
 
 
+def numeric_khz(value: str | None) -> int | None:
+    if value is None or not value.isdecimal():
+        return None
+    parsed = int(value)
+    return parsed if parsed > 0 else None
+
+
+def conservative_max_freq(overlay_max_freq: str, base_max_freq: str | None) -> str:
+    base_max_freq = base_max_freq or "uncapped"
+    if base_max_freq == "uncapped":
+        return overlay_max_freq
+    if overlay_max_freq == "uncapped":
+        return base_max_freq
+
+    base_numeric = numeric_khz(base_max_freq)
+    overlay_numeric = numeric_khz(overlay_max_freq)
+    if base_numeric is not None and overlay_numeric is not None:
+        return str(min(base_numeric, overlay_numeric))
+    if base_numeric is not None and overlay_numeric is None:
+        return base_max_freq
+    return overlay_max_freq
+
+
 def overlay_values(
     base_state: dict[str, str], stage: str
 ) -> tuple[dict[str, str], bool]:
@@ -248,7 +285,9 @@ def overlay_values(
         values = {
             "epp": SOFT_IDLE_EPP,
             "boost": boost,
-            "max_freq": SOFT_IDLE_MAX_FREQ_KHZ,
+            "max_freq": conservative_max_freq(
+                SOFT_IDLE_MAX_FREQ_KHZ, base_state.get("max_freq")
+            ),
             "stapm": base_state.get("stapm_mw", "18000"),
             "fast": base_state.get("fast_mw", "30000"),
             "slow": base_state.get("slow_mw", "15000"),
@@ -262,7 +301,9 @@ def overlay_values(
         values = {
             "epp": DEEP_IDLE_EPP,
             "boost": boost,
-            "max_freq": DEEP_IDLE_MAX_FREQ_KHZ,
+            "max_freq": conservative_max_freq(
+                DEEP_IDLE_MAX_FREQ_KHZ, base_state.get("max_freq")
+            ),
             "stapm": DEEP_IDLE_STAPM_MW,
             "fast": DEEP_IDLE_FAST_MW,
             "slow": DEEP_IDLE_SLOW_MW,
@@ -284,16 +325,17 @@ def apply_idle_overlay(
         return False
 
     values, apply_ryzenadj = overlay_values(base_state, stage)
-    set_cpu_policy(values["epp"], values["boost"], values["max_freq"])
-    apply_ryzen_limits(
-        values["stapm"],
-        values["fast"],
-        values["slow"],
-        values["apu"],
-        values["tctl"],
-        apply_ryzenadj,
-    )
-    write_idle_state(base_state, stage, values, busy_percent, current_load1)
+    with dispatcher_lock():
+        set_cpu_policy(values["epp"], values["boost"], values["max_freq"])
+        apply_ryzen_limits(
+            values["stapm"],
+            values["fast"],
+            values["slow"],
+            values["apu"],
+            values["tctl"],
+            apply_ryzenadj,
+        )
+        write_idle_state(base_state, stage, values, busy_percent, current_load1)
     print(
         f"EliteBook {stage} idle overlay active: "
         f"EPP {values['epp']}, boost {values['boost']}, max freq {values['max_freq']}, "
@@ -307,19 +349,20 @@ def restore_base_profile(base_state: dict[str, str]) -> bool:
     if not profile_state_is_complete(base_state):
         return False
 
-    set_cpu_policy(
-        base_state.get("epp", "balance_power"),
-        base_state.get("boost", "on"),
-        base_state.get("max_freq", "uncapped"),
-    )
-    apply_ryzen_limits(
-        base_state.get("stapm_mw", "18000"),
-        base_state.get("fast_mw", "30000"),
-        base_state.get("slow_mw", "15000"),
-        base_state.get("apu_mw", "15000"),
-        base_state.get("tctl_c", "88"),
-    )
-    clear_idle_state()
+    with dispatcher_lock():
+        set_cpu_policy(
+            base_state.get("epp", "balance_power"),
+            base_state.get("boost", "on"),
+            base_state.get("max_freq", "uncapped"),
+        )
+        apply_ryzen_limits(
+            base_state.get("stapm_mw", "18000"),
+            base_state.get("fast_mw", "30000"),
+            base_state.get("slow_mw", "15000"),
+            base_state.get("apu_mw", "15000"),
+            base_state.get("tctl_c", "88"),
+        )
+        clear_idle_state()
     print(
         "EliteBook idle overlay cleared: restored "
         f"{base_state.get('profile', 'unknown')} profile.",

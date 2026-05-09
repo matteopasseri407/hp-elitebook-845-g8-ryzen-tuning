@@ -81,6 +81,7 @@ fi
 missing_pkgs=()
 command -v python3   >/dev/null 2>&1 || missing_pkgs+=("python3")
 command -v tuned-adm >/dev/null 2>&1 || missing_pkgs+=("tuned")
+command -v flock     >/dev/null 2>&1 || missing_pkgs+=("util-linux-core")
 if [[ "$WITH_GNOME_EXTENSION" -eq 1 ]]; then
   command -v pkexec >/dev/null 2>&1 || missing_pkgs+=("polkit")
 fi

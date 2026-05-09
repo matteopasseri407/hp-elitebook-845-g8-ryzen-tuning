@@ -38,12 +38,14 @@ jobs:
         run: |
           ruff check \
             src/elitebook-idle-watcher \
-            src/elitebook-steam-game-watcher
+            src/elitebook-steam-game-watcher \
+            tests
       - name: Format check
         run: |
           ruff format --check \
             src/elitebook-idle-watcher \
-            src/elitebook-steam-game-watcher
+            src/elitebook-steam-game-watcher \
+            tests
 
   python-syntax:
     name: Python tests
@@ -57,6 +59,8 @@ jobs:
         run: |
           python3 -m py_compile \
             src/elitebook-idle-watcher \
-            src/elitebook-steam-game-watcher
+            src/elitebook-steam-game-watcher \
+            tests/test_idle_watcher.py \
+            tests/test_steam_game_watcher.py
       - name: Run unit tests
         run: python3 -m unittest discover -s tests -v
