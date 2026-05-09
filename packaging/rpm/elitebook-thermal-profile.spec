@@ -12,6 +12,7 @@ URL:            %{upstream_url}
 Source0:        %{upstream_url}/archive/refs/tags/v%{version}.tar.gz
 
 BuildArch:      noarch
+BuildRequires:  python3
 BuildRequires:  systemd-rpm-macros
 
 Requires:       bash
