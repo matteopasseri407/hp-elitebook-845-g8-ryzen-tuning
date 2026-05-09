@@ -12,7 +12,7 @@ Tested on:
 - AMD Ryzen 7 PRO 5850U
 - Fedora Linux 44
 - GNOME Shell 50
-- Linux 6.19 series
+- Linux 6.19 series and 7.0.4-200.fc44.x86_64
 
 This is intentionally hardware-scoped. The main script refuses to run on unrecognized hardware unless `ELITEBOOK_THERMAL_FORCE=1` is set.
 

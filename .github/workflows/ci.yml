@@ -46,7 +46,7 @@ jobs:
             src/elitebook-steam-game-watcher
 
   python-syntax:
-    name: Python syntax sanity
+    name: Python tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -58,3 +58,5 @@ jobs:
           python3 -m py_compile \
             src/elitebook-idle-watcher \
             src/elitebook-steam-game-watcher
+      - name: Run unit tests
+        run: python3 -m unittest discover -s tests -v
