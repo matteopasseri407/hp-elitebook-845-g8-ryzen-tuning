@@ -16,18 +16,34 @@ RuntimeDirectoryPreserve=yes
 # Hardening. ProtectKernelTunables is intentionally left off because the
 # script writes CPU policy hints under /sys/devices/system/cpu/cpufreq.
 NoNewPrivileges=yes
+CapabilityBoundingSet=CAP_SYS_RAWIO CAP_SYS_NICE CAP_DAC_OVERRIDE
+AmbientCapabilities=
 ProtectSystem=strict
 ReadWritePaths=/run/elitebook-thermal-profile
 ProtectHome=yes
+PrivateNetwork=yes
 PrivateTmp=yes
+RestrictAddressFamilies=AF_UNIX
+IPAddressDeny=any
 RestrictNamespaces=yes
 RestrictRealtime=yes
 RestrictSUIDSGID=yes
 LockPersonality=yes
 SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources @debug @mount @swap @reboot
+MemoryDenyWriteExecute=yes
+ProtectClock=yes
+ProtectHostname=yes
 ProtectKernelLogs=yes
 ProtectKernelModules=yes
 ProtectControlGroups=yes
+ProtectProc=invisible
+KeyringMode=private
+DevicePolicy=closed
+DeviceAllow=/dev/mem rw
+DeviceAllow=/dev/ryzen_smu rw
+UMask=0077
 
 [Install]
 WantedBy=multi-user.target
