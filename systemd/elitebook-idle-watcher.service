@@ -9,7 +9,7 @@ Type=simple
 Environment=ELITEBOOK_IDLE_SAMPLE_INTERVAL=1
 Environment=ELITEBOOK_IDLE_SOFT_ENTER_SAMPLES=5
 Environment=ELITEBOOK_IDLE_DEEP_ENTER_SAMPLES=30
-Environment=ELITEBOOK_IDLE_ENTER_BUSY_PERCENT=2.0
+Environment=ELITEBOOK_IDLE_ENTER_BUSY_PERCENT=2.5
 Environment=ELITEBOOK_IDLE_EXIT_BUSY_PERCENT=8.0
 Environment=ELITEBOOK_IDLE_ENTER_LOAD1=1.2
 Environment=ELITEBOOK_IDLE_EXIT_LOAD1=1.6
@@ -37,18 +37,34 @@ MemoryMax=64M
 # Hardening. ProtectKernelTunables is intentionally left off because the
 # watcher writes EPP and frequency hints under /sys/devices/system/cpu.
 NoNewPrivileges=yes
+CapabilityBoundingSet=CAP_SYS_RAWIO CAP_SYS_NICE CAP_DAC_OVERRIDE
+AmbientCapabilities=
 ProtectSystem=strict
 ReadWritePaths=/run/elitebook-thermal-profile
 ProtectHome=yes
+PrivateNetwork=yes
 PrivateTmp=yes
+RestrictAddressFamilies=AF_UNIX
+IPAddressDeny=any
 RestrictNamespaces=yes
 RestrictRealtime=yes
 RestrictSUIDSGID=yes
 LockPersonality=yes
 SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources @debug @mount @swap @reboot
+MemoryDenyWriteExecute=yes
+ProtectClock=yes
+ProtectHostname=yes
 ProtectKernelLogs=yes
 ProtectKernelModules=yes
 ProtectControlGroups=yes
+ProtectProc=invisible
+KeyringMode=private
+DevicePolicy=closed
+DeviceAllow=/dev/mem rw
+DeviceAllow=/dev/ryzen_smu rw
+UMask=0077
 RemoveIPC=yes
 
 [Install]

@@ -6,6 +6,8 @@ STATE_DIR="${ELITEBOOK_THERMAL_STATE_DIR:-/run/elitebook-thermal-profile}"
 STATE_FILE="$STATE_DIR/current"
 LOCK_FILE="$STATE_DIR/dispatcher.lock"
 POWER_SUPPLY_DIR="${ELITEBOOK_POWER_SUPPLY_DIR:-/sys/class/power_supply}"
+DMI_ID_DIR="${ELITEBOOK_DMI_ID_DIR:-/sys/class/dmi/id}"
+CPUINFO_PATH="${ELITEBOOK_CPUINFO_PATH:-/proc/cpuinfo}"
 
 usage() {
   cat >&2 <<'EOF'
@@ -40,6 +42,28 @@ truthy() {
 
 is_uint() {
   [[ "${1:-}" =~ ^[0-9]+$ ]]
+}
+
+is_supported_product() {
+  case "$1" in
+    *"EliteBook 835 G7"*|*"EliteBook 835 G8"*|*"EliteBook 835 G9"*|\
+    *"EliteBook 845 G7"*|*"EliteBook 845 G8"*|*"EliteBook 845 G9"*|\
+    *"ProBook 445 G8"*|*"ProBook 445 G9"*|\
+    *"ProBook 455 G8"*|*"ProBook 455 G9"*)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+is_validated_cezanne_cpu() {
+  [[ "$1" =~ AMD\ Ryzen\ (5|7)\ PRO\ (5650U|5750U|5850U) ]]
+}
+
+is_known_rembrandt_cpu() {
+  [[ "$1" =~ AMD\ Ryzen\ (5|7)\ PRO\ (6650U|6850U) ]]
 }
 
 on_ac_power() {
@@ -122,18 +146,25 @@ assert_supported_hardware() {
   truthy "${ELITEBOOK_THERMAL_FORCE:-}" && return 0
 
   local vendor product cpu
-  vendor="$(read_trimmed /sys/class/dmi/id/sys_vendor)"
-  product="$(read_trimmed /sys/class/dmi/id/product_name)"
-  cpu="$(awk -F: '/model name/ {sub(/^[ \t]+/, "", $2); print $2; exit}' /proc/cpuinfo 2>/dev/null || true)"
+  vendor="$(read_trimmed "$DMI_ID_DIR/sys_vendor")"
+  product="$(read_trimmed "$DMI_ID_DIR/product_name")"
+  cpu="$(awk -F: '/model name/ {sub(/^[ \t]+/, "", $2); print $2; exit}' "$CPUINFO_PATH" 2>/dev/null || true)"
 
   [[ "$vendor" == "HP" || "$vendor" == "Hewlett-Packard" ]] ||
     die "unsupported vendor '$vendor' (set ELITEBOOK_THERMAL_FORCE=1 to override)"
 
-  [[ "$product" == *"EliteBook 845 G8"* ]] ||
+  is_supported_product "$product" ||
     die "unsupported product '$product' (set ELITEBOOK_THERMAL_FORCE=1 to override)"
 
-  [[ "$cpu" == *"AMD Ryzen 7 PRO 5850U"* ]] ||
-    die "unsupported CPU '$cpu' (set ELITEBOOK_THERMAL_FORCE=1 to override)"
+  if is_validated_cezanne_cpu "$cpu"; then
+    return 0
+  fi
+
+  if is_known_rembrandt_cpu "$cpu"; then
+    die "known HP AMD Rembrandt hardware '$product' / '$cpu' is not enabled yet because these SMU limits are only validated on Cezanne (set ELITEBOOK_THERMAL_FORCE=1 to override after reviewing profile values)"
+  fi
+
+  die "unsupported CPU '$cpu' (validated Cezanne CPUs: Ryzen PRO 5650U, 5750U, 5850U; set ELITEBOOK_THERMAL_FORCE=1 to override)"
 }
 
 detect_profile() {
@@ -188,6 +219,8 @@ if [[ "${EUID}" -ne 0 ]]; then
     ELITEBOOK_BATTERY_SAVER_MAX_FREQ_KHZ="${ELITEBOOK_BATTERY_SAVER_MAX_FREQ_KHZ:-}" \
     ELITEBOOK_THERMAL_STATE_DIR="${ELITEBOOK_THERMAL_STATE_DIR:-}" \
     ELITEBOOK_POWER_SUPPLY_DIR="${ELITEBOOK_POWER_SUPPLY_DIR:-}" \
+    ELITEBOOK_DMI_ID_DIR="${ELITEBOOK_DMI_ID_DIR:-}" \
+    ELITEBOOK_CPUINFO_PATH="${ELITEBOOK_CPUINFO_PATH:-}" \
     "$0" "$@"
 fi
 
@@ -196,7 +229,7 @@ SUDO=()
 acquire_dispatcher_lock() {
   install -d -m 0755 "$STATE_DIR"
   exec 9>"$LOCK_FILE"
-  flock -x 9
+  flock -w 10 -x 9 || die "could not acquire dispatcher lock within 10s"
 }
 
 RYZENADJ_BIN="$(find_ryzenadj)"
