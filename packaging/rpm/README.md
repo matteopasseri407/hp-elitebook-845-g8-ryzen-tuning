@@ -30,8 +30,9 @@ the RPM-owned install inside normal distribution paths while leaving
 
 ## Manual COPR Flow
 
-After creating the COPR project, build from the released tag rather than an
-unreviewed branch:
+After creating the COPR project, build the spec from the reviewed packaging
+merge commit. The spec itself still downloads the released `v0.2.0` source
+tarball.
 
 ```bash
 copr-cli create elitebook-thermal-profile \
@@ -40,7 +41,7 @@ copr-cli create elitebook-thermal-profile \
 
 copr-cli buildscm elitebook-thermal-profile \
   --clone-url https://github.com/matteopasseri407/hp-elitebook-845-g8-ryzen-tuning.git \
-  --commit v0.2.0 \
+  --commit a16d296796a6d845971c0db67909dc6f2d59ccf3 \
   --spec packaging/rpm/elitebook-thermal-profile.spec \
   --method rpkg \
   -r fedora-44-x86_64
