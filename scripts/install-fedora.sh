@@ -361,7 +361,7 @@ install_profile_files() {
 install_gnome_extension() {
   local extension_dest extension_src legacy_extension_dest target_group target_home target_user
 
-  [[ "$WITH_GNOME_EXTENSION" -eq 1 ]] || return
+  [[ "$WITH_GNOME_EXTENSION" -eq 1 ]] || return 0
 
   target_user="${SUDO_USER:-}"
   if [[ -z "$target_user" || "$target_user" = "root" ]]; then
@@ -462,7 +462,7 @@ remove_owned_ryzenadj() {
 remove_gnome_extension() {
   local extension_dest target_home target_user
 
-  [[ "$REMOVE_GNOME_EXTENSION" -eq 1 ]] || return
+  [[ "$REMOVE_GNOME_EXTENSION" -eq 1 ]] || return 0
 
   target_user="${SUDO_USER:-}"
   if [[ -z "$target_user" || "$target_user" = "root" ]]; then

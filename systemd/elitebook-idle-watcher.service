@@ -37,7 +37,8 @@ MemoryMax=64M
 # Hardening. ProtectKernelTunables is intentionally left off because the
 # watcher writes EPP and frequency hints under /sys/devices/system/cpu.
 NoNewPrivileges=yes
-CapabilityBoundingSet=CAP_SYS_RAWIO CAP_SYS_NICE CAP_DAC_OVERRIDE
+# RyzenAdj's fallback path needs raw I/O plus PCI config access.
+CapabilityBoundingSet=CAP_SYS_ADMIN CAP_SYS_RAWIO CAP_SYS_NICE CAP_DAC_OVERRIDE
 AmbientCapabilities=
 ProtectSystem=strict
 ReadWritePaths=/run/elitebook-thermal-profile

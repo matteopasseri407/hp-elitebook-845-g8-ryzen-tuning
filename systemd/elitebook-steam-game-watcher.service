@@ -15,14 +15,16 @@ Restart=on-failure
 RestartSec=5s
 Nice=10
 IOSchedulingClass=idle
-CPUQuota=2%
+CPUQuota=5%
 MemoryMax=64M
 
 # Hardening. ProtectKernelTunables is intentionally left off because the
 # watcher shells out to elitebook-thermal-profile, which writes EPP and
 # frequency hints under /sys; the child process inherits this restriction.
 NoNewPrivileges=yes
-CapabilityBoundingSet=CAP_SYS_RAWIO CAP_SYS_NICE CAP_DAC_OVERRIDE
+# RyzenAdj's fallback path needs raw I/O plus PCI config access. The watcher
+# also needs ptrace permission to read Steam game environment blocks in /proc.
+CapabilityBoundingSet=CAP_SYS_ADMIN CAP_SYS_RAWIO CAP_SYS_NICE CAP_DAC_OVERRIDE CAP_SYS_PTRACE
 AmbientCapabilities=
 ProtectSystem=strict
 ReadWritePaths=/run/elitebook-thermal-profile

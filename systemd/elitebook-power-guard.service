@@ -12,7 +12,8 @@ TimeoutStartSec=90s
 # This service intentionally keeps write access to the host system because its
 # job is to remask conflicting power profile units after package changes.
 NoNewPrivileges=yes
-CapabilityBoundingSet=CAP_SYS_RAWIO CAP_SYS_NICE CAP_DAC_OVERRIDE
+# RyzenAdj's fallback path needs raw I/O plus PCI config access.
+CapabilityBoundingSet=CAP_SYS_ADMIN CAP_SYS_RAWIO CAP_SYS_NICE CAP_DAC_OVERRIDE
 AmbientCapabilities=
 ProtectSystem=strict
 ReadWritePaths=/etc/systemd/system /run/elitebook-thermal-profile
