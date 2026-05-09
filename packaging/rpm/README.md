@@ -1,17 +1,21 @@
 # RPM Packaging
 
-The current stable Fedora path is still source-based installation through
-`scripts/install-fedora.sh`. The next distribution step is the COPR-oriented
-RPM spec in this directory:
+Fedora 44 RPM packaging is published through COPR:
+
+```bash
+sudo dnf copr enable matteo407/elitebook-thermal-profile
+sudo dnf install elitebook-thermal-profile
+```
+
+The COPR-oriented RPM spec lives in this directory:
 
 ```bash
 packaging/rpm/elitebook-thermal-profile.spec
 ```
 
-Do not publish a COPR build until the RyzenAdj dependency story is explicit:
-either RyzenAdj is available from a known package source, or this project
-documents a safe companion package/installation path. The current spec treats
-RyzenAdj as a weak dependency and documents the sysfs-only fallback.
+RyzenAdj is not vendored. The current spec treats RyzenAdj as a weak dependency
+and documents the sysfs-only fallback for EPP, boost, and CPU frequency when
+RyzenAdj is unavailable.
 
 ## Package Layout
 
@@ -30,9 +34,10 @@ the RPM-owned install inside normal distribution paths while leaving
 
 ## Manual COPR Flow
 
-After creating the COPR project, build the spec from the reviewed packaging
-merge commit. The spec itself still downloads the released `v0.2.0` source
-tarball.
+The first successful public build was `10440246` for Fedora 44 x86_64. To
+reproduce the same source/spec pairing manually, build from the reviewed commit
+that contains the packaging fix. The spec itself still downloads the released
+`v0.2.0` source tarball.
 
 ```bash
 copr-cli create elitebook-thermal-profile \
@@ -41,7 +46,7 @@ copr-cli create elitebook-thermal-profile \
 
 copr-cli buildscm elitebook-thermal-profile \
   --clone-url https://github.com/matteopasseri407/hp-elitebook-845-g8-ryzen-tuning.git \
-  --commit a16d296796a6d845971c0db67909dc6f2d59ccf3 \
+  --commit 95ee496816ef5bc160f603049ca0eba621f2bd21 \
   --spec packaging/rpm/elitebook-thermal-profile.spec \
   --method rpkg \
   -r fedora-44-x86_64

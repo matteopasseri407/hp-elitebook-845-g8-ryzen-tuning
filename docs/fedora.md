@@ -2,9 +2,26 @@
 
 Fedora is the primary tested distribution for this repository.
 
-Current distribution status: Fedora source install is supported and tested. COPR/RPM packaging is planned, but not published yet because RyzenAdj is not currently treated as a packaged Fedora dependency in this repository.
+Current distribution status: Fedora 44 COPR/RPM packaging is published and
+tested. The source installer remains supported, especially when you want it to
+build the pinned RyzenAdj release locally.
 
 ## Packages
+
+COPR RPM:
+
+```bash
+sudo dnf copr enable matteo407/elitebook-thermal-profile
+sudo dnf install elitebook-thermal-profile
+```
+
+Optional GNOME Shell indicator:
+
+```bash
+sudo dnf install gnome-shell-extension-elitebook-thermal-profile
+```
+
+Source installer dependencies:
 
 ```bash
 sudo dnf install tuned python3 polkit lm_sensors
@@ -18,7 +35,7 @@ RyzenAdj is not vendored here. Install it separately and make sure one of these 
 /usr/bin/ryzenadj -i
 ```
 
-## Install
+## Install From Source
 
 From the repository root:
 

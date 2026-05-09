@@ -20,16 +20,31 @@ This is intentionally hardware-scoped. The main script refuses to run on unrecog
 
 ## Quickstart
 
-For Fedora users with a supported HP business Cezanne laptop:
+For Fedora 44 users with a supported HP business Cezanne laptop, the COPR RPM is
+the lowest-friction install path:
 
 ```bash
-sudo dnf install tuned python3 polkit
-git clone https://github.com/matteopasseri407/hp-elitebook-845-g8-ryzen-tuning.git
-cd hp-elitebook-845-g8-ryzen-tuning
-sudo ./scripts/install-fedora.sh
+sudo dnf copr enable matteo407/elitebook-thermal-profile
+sudo dnf install elitebook-thermal-profile
 ```
 
-If `ryzenadj` is not packaged for your Fedora version, the installer can build a pinned, SHA256-verified source release with `--build-ryzenadj`. See [Supported Hardware](#supported-hardware) for the validated laptop list and [Install On Fedora](#install-on-fedora) for the optional flags (custom builds, GNOME extension, individual watcher opt-outs). Other distributions are not packaged yet — see [Related Work](#related-work) and the roadmap.
+The RPM deliberately installs files only; it does not start hardware tuning
+during package installation. After reviewing the supported hardware table:
+
+```bash
+sudo systemctl enable --now elitebook-thermal-profile.service
+sudo systemctl enable --now elitebook-idle-watcher.service
+sudo systemctl enable --now elitebook-steam-game-watcher.service
+sudo systemctl enable --now elitebook-power-guard.timer
+sudo systemctl start elitebook-power-guard.service
+```
+
+If `ryzenadj` is not packaged for your Fedora version, the source installer can
+build a pinned, SHA256-verified RyzenAdj release with `--build-ryzenadj`.
+Without RyzenAdj, the RPM still degrades to sysfs controls for EPP, boost, and
+CPU frequency where the kernel exposes them. See [Supported Hardware](#supported-hardware)
+before enabling services on any machine. Other distributions are not packaged
+yet; see [Related Work](#related-work) and the roadmap.
 
 ## Supported Hardware
 
@@ -99,6 +114,32 @@ sudo ./scripts/install-fedora.sh --build-ryzenadj
 The source-build path pins RyzenAdj `v0.17.0` at commit `67aa960e71bf4cdd140b47d42c0c62c4cded68d1` and verifies SHA256 `848ac9d86ff65d30f5e2c8600aac2613f0f10003b0d6f0e516a54761d7345d44` before compiling.
 
 ## Install On Fedora
+
+### COPR RPM
+
+```bash
+sudo dnf copr enable matteo407/elitebook-thermal-profile
+sudo dnf install elitebook-thermal-profile
+```
+
+Optional GNOME Shell indicator:
+
+```bash
+sudo dnf install gnome-shell-extension-elitebook-thermal-profile
+gnome-extensions enable elitebook-thermal-profile@matteopasseri.github.io
+```
+
+After installing the RPM, enable the runtime services explicitly:
+
+```bash
+sudo systemctl enable --now elitebook-thermal-profile.service
+sudo systemctl enable --now elitebook-idle-watcher.service
+sudo systemctl enable --now elitebook-steam-game-watcher.service
+sudo systemctl enable --now elitebook-power-guard.timer
+sudo systemctl start elitebook-power-guard.service
+```
+
+### Source Installer
 
 ```bash
 sudo dnf install tuned python3 polkit
@@ -277,7 +318,7 @@ Read [docs/safety.md](docs/safety.md) before adapting it to other machines.
 ## Roadmap
 
 - Consider renaming the public repository to `cezanne-thermal-profile` or `hp-amd-thermal-tuner` before a broader release. The current repository name is accurate for the original test laptop but too narrow for the validated Cezanne hardware table above.
-- Fedora COPR packaging once the RyzenAdj dependency path is clean
+- RyzenAdj companion packaging or clearer per-distribution dependency paths
 - RPM spec cleanup for `/usr/libexec` and packaged systemd units
 - More test reports across BIOS versions
 - Optional install profiles for other Linux distributions
