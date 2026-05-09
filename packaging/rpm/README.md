@@ -37,10 +37,9 @@ the RPM-owned install inside normal distribution paths while leaving
 
 ## Manual COPR Flow
 
-The first successful public build was `10440246` for Fedora 44 x86_64. To
-reproduce the same source/spec pairing manually, build from the reviewed commit
-that contains the packaging fix. The spec itself still downloads the released
-`v0.2.0` source tarball.
+The first successful public build was `10440246` for Fedora 44 x86_64. The
+current supported Fedora package is built from the `v0.2.1` tag; the spec
+downloads the matching released source tarball.
 
 ```bash
 copr-cli create elitebook-thermal-profile \
@@ -49,13 +48,13 @@ copr-cli create elitebook-thermal-profile \
 
 copr-cli buildscm elitebook-thermal-profile \
   --clone-url https://github.com/matteopasseri407/hp-elitebook-845-g8-ryzen-tuning.git \
-  --commit 95ee496816ef5bc160f603049ca0eba621f2bd21 \
+  --commit v0.2.1 \
   --spec packaging/rpm/elitebook-thermal-profile.spec \
   --method rpkg \
   -r fedora-44-x86_64
 ```
 
-Build RyzenAdj from the same repository commit after the `ryzenadj.spec` change:
+Build RyzenAdj from the pinned packaging commit:
 
 ```bash
 copr-cli buildscm elitebook-thermal-profile \

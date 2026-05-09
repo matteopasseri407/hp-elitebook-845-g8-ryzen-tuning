@@ -1,5 +1,10 @@
 # HP AMD Ryzen Thermal Profiles
 
+[![CI](https://github.com/matteopasseri407/hp-elitebook-845-g8-ryzen-tuning/actions/workflows/ci.yml/badge.svg)](https://github.com/matteopasseri407/hp-elitebook-845-g8-ryzen-tuning/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/matteopasseri407/hp-elitebook-845-g8-ryzen-tuning)](https://github.com/matteopasseri407/hp-elitebook-845-g8-ryzen-tuning/releases)
+[![Fedora COPR](https://img.shields.io/badge/Fedora_COPR-matteo407%2Felitebook--thermal--profile-51A2DA?logo=fedora)](https://copr.fedorainfracloud.org/coprs/matteo407/elitebook-thermal-profile/)
+[![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](LICENSE)
+
 Thermal and power profiles for selected HP EliteBook and ProBook AMD Ryzen laptops.
 
 The profile values are field-tested on an HP EliteBook 845 G8 with the AMD Ryzen 7 PRO 5850U. Other HP Cezanne models are accepted by the hardware guard only when they match the validated CPU family listed below. Rembrandt models are recognized but intentionally blocked by default until their SMU behavior is validated.
@@ -19,6 +24,12 @@ Tested on:
 This is intentionally hardware-scoped. The main script refuses to run on unrecognized hardware unless `ELITEBOOK_THERMAL_FORCE=1` is set.
 
 ## Quickstart
+
+**Fedora status:** Fedora 44 x86_64 is the primary supported distribution path.
+The public COPR publishes `elitebook-thermal-profile`,
+`gnome-shell-extension-elitebook-thermal-profile`, and upstream RyzenAdj
+`v0.17.0`. Package installation is intentionally passive: it installs files only
+and does not start hardware tuning until you enable the services below.
 
 For Fedora 44 users with a supported HP business Cezanne laptop, the COPR RPM is
 the lowest-friction install path:
@@ -352,7 +363,6 @@ Read [docs/safety.md](docs/safety.md) before adapting it to other machines.
 ## Roadmap
 
 - Consider renaming the public repository to `cezanne-thermal-profile` or `hp-amd-thermal-tuner` before a broader release. The current repository name is accurate for the original test laptop but too narrow for the validated Cezanne hardware table above.
-- RyzenAdj companion packaging or clearer per-distribution dependency paths
 - RPM spec cleanup for `/usr/libexec` and packaged systemd units
 - More test reports across BIOS versions
-- Optional install profiles for other Linux distributions
+- Optional AUR and `.deb` install paths after Fedora usage reports justify the maintenance cost
