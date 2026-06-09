@@ -353,26 +353,52 @@ fi
 
 # The inner script receives values as positional parameters; keep it single
 # quoted so the outer shell does not expand sysfs paths or loop variables.
+# A failed or unsupported sysfs write must not abort the dispatcher under
+# set -e before the SMU limits are applied, so the inner script warns and
+# always exits 0.
 # shellcheck disable=SC2016
 "${SUDO[@]}" sh -c '
 boost_value="$1"
 max_freq="$2"
 
 if [ -w /sys/devices/system/cpu/cpufreq/boost ]; then
-  echo "$boost_value" > /sys/devices/system/cpu/cpufreq/boost
+  echo "$boost_value" > /sys/devices/system/cpu/cpufreq/boost 2>/dev/null ||
+    echo "elitebook-thermal-profile: warning: failed to write cpufreq boost" >&2
 fi
 
 for d in /sys/devices/system/cpu/cpufreq/policy*; do
   [ -d "$d" ] || continue
   if [ "$max_freq" = "uncapped" ] && [ -w "$d/scaling_max_freq" ] && [ -r "$d/cpuinfo_max_freq" ]; then
-    cat "$d/cpuinfo_max_freq" > "$d/scaling_max_freq"
+    cat "$d/cpuinfo_max_freq" > "$d/scaling_max_freq" 2>/dev/null ||
+      echo "elitebook-thermal-profile: warning: failed to restore $d/scaling_max_freq" >&2
   elif [ "$max_freq" != "uncapped" ] && [ -w "$d/scaling_max_freq" ]; then
-    echo "$max_freq" > "$d/scaling_max_freq"
+    echo "$max_freq" > "$d/scaling_max_freq" 2>/dev/null ||
+      echo "elitebook-thermal-profile: warning: rejected max freq $max_freq for $d" >&2
   fi
 done
+exit 0
 ' sh "$([[ "$boost" = "on" ]] && echo 1 || echo 0)" "$max_freq"
 
-"${SUDO[@]}" sh -c "for d in /sys/devices/system/cpu/cpufreq/policy*; do [ -w \"\$d/energy_performance_preference\" ] && echo '$epp' > \"\$d/energy_performance_preference\"; done"
+# EPP files only exist when the cpufreq driver runs in EPP mode (for example
+# amd-pstate-epp). On passive/guided drivers no policy is writable; warn and
+# continue so RyzenAdj limits and the state file are still applied.
+# shellcheck disable=SC2016
+"${SUDO[@]}" sh -c '
+epp="$1"
+applied=0
+for d in /sys/devices/system/cpu/cpufreq/policy*; do
+  [ -w "$d/energy_performance_preference" ] || continue
+  if echo "$epp" > "$d/energy_performance_preference" 2>/dev/null; then
+    applied=$((applied + 1))
+  else
+    echo "elitebook-thermal-profile: warning: failed to write EPP $epp to $d" >&2
+  fi
+done
+if [ "$applied" -eq 0 ]; then
+  echo "elitebook-thermal-profile: warning: no cpufreq policy accepted EPP $epp; skipping EPP (cpufreq driver not in EPP mode?)" >&2
+fi
+exit 0
+' sh "$epp"
 
 "${SUDO[@]}" "$RYZENADJ_BIN" \
   --stapm-limit="$stapm" \
