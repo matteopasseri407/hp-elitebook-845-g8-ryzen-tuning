@@ -1,5 +1,5 @@
 Name:           elitebook-thermal-profile
-Version:        0.2.1
+Version:        0.3.0
 Release:        1%{?dist}
 Summary:        Thermal and power profiles for HP AMD Cezanne laptops
 
@@ -60,7 +60,7 @@ daily UI.
 # Scripts and GNOME Shell files do not need a build step.
 
 %check
-bash -n src/elitebook-thermal-profile src/elitebook-power-guard system-sleep/elitebook-thermal-profile
+bash -n src/elitebook-thermal-profile src/elitebook-power-guard src/elitebook-hibernate-preflight system-sleep/elitebook-thermal-profile
 python3 -m py_compile src/elitebook-idle-watcher src/elitebook-steam-game-watcher
 
 %install
@@ -72,6 +72,8 @@ install -Dm0755 src/elitebook-power-guard \
   %{buildroot}%{_bindir}/elitebook-power-guard
 install -Dm0755 src/elitebook-steam-game-watcher \
   %{buildroot}%{_bindir}/elitebook-steam-game-watcher
+install -Dm0755 src/elitebook-hibernate-preflight \
+  %{buildroot}%{_bindir}/elitebook-hibernate-preflight
 
 install -Dm0644 systemd/elitebook-thermal-profile.service \
   %{buildroot}%{_unitdir}/elitebook-thermal-profile.service
@@ -92,10 +94,23 @@ install -Dm0755 system-sleep/elitebook-thermal-profile \
 install -d %{buildroot}%{_datadir}/gnome-shell/extensions
 cp -a gnome-extension/%{extension_uuid} %{buildroot}%{_datadir}/gnome-shell/extensions/
 
+# Hibernate preflight drop-ins are shipped as inert examples instead of live
+# units so installing the RPM never blocks hibernate by itself. Activation
+# stays explicit: copy them to /etc/systemd/system/ and create
+# /etc/elitebook-hibernate.conf as described in the README.
+install -Dm0644 systemd/systemd-hibernate.service.d/10-elitebook-preflight.conf \
+  %{buildroot}%{_datadir}/%{name}/examples/systemd-hibernate.service.d/10-elitebook-preflight.conf
+install -Dm0644 systemd/systemd-suspend-then-hibernate.service.d/10-elitebook-preflight.conf \
+  %{buildroot}%{_datadir}/%{name}/examples/systemd-suspend-then-hibernate.service.d/10-elitebook-preflight.conf
+install -Dm0644 config/elitebook-hibernate.conf.example \
+  %{buildroot}%{_datadir}/%{name}/examples/elitebook-hibernate.conf.example
+
 sed -i \
   -e 's#/usr/local/sbin#%{_bindir}#g' \
   %{buildroot}%{_unitdir}/elitebook-*.service \
-  %{buildroot}%{_systemd_sleepdir}/elitebook-thermal-profile
+  %{buildroot}%{_systemd_sleepdir}/elitebook-thermal-profile \
+  %{buildroot}%{_datadir}/%{name}/examples/systemd-hibernate.service.d/10-elitebook-preflight.conf \
+  %{buildroot}%{_datadir}/%{name}/examples/systemd-suspend-then-hibernate.service.d/10-elitebook-preflight.conf
 
 sed -i \
   -e 's#/usr/local/sbin#%{_bindir}#g' \
@@ -125,6 +140,9 @@ Enable it explicitly after reviewing the supported hardware table:
 
 Full SMU control requires RyzenAdj. Without it, sysfs fallback controls still
 cover EPP, boost, and CPU frequency where supported by the kernel.
+
+The btrfs swapfile hibernate preflight is inactive by default; see
+/usr/share/elitebook-thermal-profile/examples/ and the README to wire it up.
 EOF
 
 %preun
@@ -143,6 +161,7 @@ fi
 %{_bindir}/elitebook-idle-watcher
 %{_bindir}/elitebook-power-guard
 %{_bindir}/elitebook-steam-game-watcher
+%{_bindir}/elitebook-hibernate-preflight
 %{_unitdir}/elitebook-thermal-profile.service
 %{_unitdir}/elitebook-idle-watcher.service
 %{_unitdir}/elitebook-steam-game-watcher.service
@@ -150,12 +169,24 @@ fi
 %{_unitdir}/elitebook-power-guard.timer
 %{_udevrulesdir}/90-elitebook-thermal-profile.rules
 %{_systemd_sleepdir}/elitebook-thermal-profile
+%{_datadir}/%{name}/
 
 %files -n gnome-shell-extension-elitebook-thermal-profile
 %doc README.md
 %{_datadir}/gnome-shell/extensions/%{extension_uuid}/
 
 %changelog
+* Tue Jun 09 2026 Matteo Passeri <matteopasseri407@users.noreply.github.com> - 0.3.0-1
+- Add the btrfs swapfile hibernate preflight with config example and
+  systemd-hibernate drop-in examples (inactive by default)
+- Disable start rate limiting on the thermal profile unit so udev
+  power_supply event bursts no longer drop profile switches
+- Keep the dispatcher alive when no cpufreq policy exposes writable EPP
+  so SMU limits and state are still applied on non-EPP drivers
+- Revert orphaned Steam gaming profiles after a watcher crash or restart
+- Raise the idle watcher CPU quota so ryzenadj is not throttled inside
+  the dispatcher lock
+
 * Sat May 09 2026 Matteo Passeri <matteopasseri407@users.noreply.github.com> - 0.2.1-1
 - Publish Fedora COPR dependency path with packaged RyzenAdj 0.17.0
 - Add Fedora install support template and release-readiness README badges

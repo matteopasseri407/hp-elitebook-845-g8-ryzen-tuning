@@ -266,16 +266,16 @@ def check_once() -> bool:
             mark_active(game)
         return True
 
-    if watcher_active():
-        state = read_current_state()
-        current = state.get("profile", "")
-        source = state.get("source", "")
-        if (
-            current == "gaming"
-            and source == "steam-game-watcher"
-            and apply_profile("auto")
-        ):
+    state = read_current_state()
+    if state.get("profile") == "gaming" and state.get("source") == "steam-game-watcher":
+        # Revert even when the watcher state file is missing: a crash or
+        # restart between applying the gaming profile and recording it must
+        # not leave an orphaned gaming profile that system-auto refuses to
+        # touch.
+        if apply_profile("auto"):
             print("Steam game ended; restored auto profile", flush=True)
+        clear_active()
+    elif watcher_active():
         clear_active()
 
     return steam_running

@@ -31,7 +31,10 @@ Restart=on-failure
 RestartSec=5s
 Nice=10
 IOSchedulingClass=idle
-CPUQuota=2%
+# The quota must leave headroom for the ryzenadj child that runs inside the
+# dispatcher lock; 2% can throttle it long enough to contend with the
+# dispatcher's 10s lock timeout.
+CPUQuota=5%
 MemoryMax=64M
 
 # Hardening. ProtectKernelTunables is intentionally left off because the

@@ -3,6 +3,12 @@ Description=Apply HP EliteBook 845 G8 Ryzen thermal profile
 Documentation=https://github.com/matteopasseri407/hp-elitebook-845-g8-ryzen-tuning
 After=tuned.service
 Wants=tuned.service
+# One AC plug/unplug can emit several power_supply change events (Mains
+# online, Battery status, capacity) within seconds. The default rate limit
+# of 5 starts per 10s drops the profile switch for the burst's last events,
+# leaving the wrong profile applied. The service is an idempotent oneshot
+# serialized by an internal dispatcher lock, so disable start rate limiting.
+StartLimitIntervalSec=0
 
 [Service]
 Type=oneshot
