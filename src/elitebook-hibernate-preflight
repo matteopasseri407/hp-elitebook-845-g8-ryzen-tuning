@@ -1,0 +1,135 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+set -euo pipefail
+
+CONFIG="${ELITEBOOK_HIBERNATE_CONF:-/etc/elitebook-hibernate.conf}"
+MODE=${1:-hibernate}
+
+usage() {
+  cat >&2 <<'EOF'
+Usage: elitebook-hibernate-preflight [hibernate|suspend-then-hibernate|check-config]
+
+Validates the btrfs swapfile hibernate setup before systemd enters hibernate:
+swapfile presence and size, SELinux label, resume offset, kernel lockdown,
+and resume= kernel arguments on both the default boot entry and the running
+kernel. On success it programs /sys/power/resume, resume_offset and
+image_size so the hibernate image lands in the verified swapfile.
+
+check-config only validates that the configuration file is complete; it does
+not require the swapfile or touch /sys/power.
+
+Configuration is read from /etc/elitebook-hibernate.conf (override with
+ELITEBOOK_HIBERNATE_CONF). See config/elitebook-hibernate.conf.example.
+EOF
+}
+
+log() {
+  printf 'elitebook-hibernate-preflight: %s\n' "$*" >&2
+}
+
+fail() {
+  log "FAILED: $*"
+  exit 1
+}
+
+require_file() {
+  local path=$1
+  [[ -e "$path" ]] || fail "missing $path"
+}
+
+require_command() {
+  local cmd=$1 hint=$2
+  command -v "$cmd" >/dev/null 2>&1 || fail "missing required command '$cmd' ($hint)"
+}
+
+case "$MODE" in
+  hibernate|suspend-then-hibernate|check-config) ;;
+  -h|--help)
+    usage
+    exit 0
+    ;;
+  *)
+    usage
+    exit 2
+    ;;
+esac
+
+require_file "$CONFIG"
+# shellcheck source=/dev/null
+. "$CONFIG"
+
+: "${SWAPFILE:?missing SWAPFILE in $CONFIG}"
+: "${RESUME_UUID:?missing RESUME_UUID in $CONFIG}"
+: "${RESUME_OFFSET:?missing RESUME_OFFSET in $CONFIG}"
+: "${IMAGE_SIZE_BYTES:?missing IMAGE_SIZE_BYTES in $CONFIG}"
+
+[[ "$SWAPFILE" == /* ]] || fail "SWAPFILE must be an absolute path, got '$SWAPFILE'"
+[[ "$RESUME_OFFSET" =~ ^[0-9]+$ ]] || fail "RESUME_OFFSET must be an integer, got '$RESUME_OFFSET'"
+[[ "$IMAGE_SIZE_BYTES" =~ ^[0-9]+$ ]] || fail "IMAGE_SIZE_BYTES must be an integer, got '$IMAGE_SIZE_BYTES'"
+
+if [[ "$MODE" == "check-config" ]]; then
+  log "ok config=$CONFIG swapfile=$SWAPFILE uuid=$RESUME_UUID offset=$RESUME_OFFSET image_size=$IMAGE_SIZE_BYTES"
+  exit 0
+fi
+
+require_command btrfs "btrfs-progs is required to verify the swapfile resume offset"
+require_command grubby "grubby is required to verify the default boot entry; this preflight currently targets Fedora-style boot configs"
+require_command swapon "util-linux is required to inspect active swap"
+
+require_file /sys/power/state
+require_file /sys/power/disk
+require_file /sys/power/resume
+require_file /sys/power/resume_offset
+require_file /sys/power/image_size
+require_file "$SWAPFILE"
+
+grep -qw disk /sys/power/state || fail "kernel does not expose disk sleep state"
+grep -qw shutdown /sys/power/disk || fail "kernel does not expose shutdown hibernate mode"
+
+if [[ -r /sys/kernel/security/lockdown ]]; then
+  lockdown=$(< /sys/kernel/security/lockdown)
+  [[ "$lockdown" == *"[none]"* ]] || fail "kernel lockdown is active: $lockdown"
+fi
+
+if command -v getenforce >/dev/null 2>&1 && [[ "$(getenforce)" == "Enforcing" ]]; then
+  swapfile_label=$(ls -Zd "$SWAPFILE" | awk '{print $1}')
+  swapfile_type=${swapfile_label#*:*:}
+  swapfile_type=${swapfile_type%%:*}
+  [[ "$swapfile_type" == "swapfile_t" ]] || fail "$SWAPFILE SELinux type is $swapfile_type; expected swapfile_t"
+fi
+
+swap_line=$(swapon --show=NAME,SIZE --bytes --noheadings | awk -v path="$SWAPFILE" '$1 == path {print $0}')
+[[ -n "$swap_line" ]] || fail "$SWAPFILE is not active swap"
+swap_bytes=$(awk '{print $2}' <<<"$swap_line")
+min_swap_bytes=$((IMAGE_SIZE_BYTES + 2147483648))
+(( swap_bytes >= min_swap_bytes )) || fail "$SWAPFILE is too small: ${swap_bytes}B < ${min_swap_bytes}B"
+
+actual_offset=$(btrfs inspect-internal map-swapfile -r "$SWAPFILE")
+[[ "$actual_offset" == "$RESUME_OFFSET" ]] || fail "resume offset changed: actual=$actual_offset configured=$RESUME_OFFSET"
+
+resume_dev="/dev/disk/by-uuid/$RESUME_UUID"
+require_file "$resume_dev"
+resume_dev=$(readlink -f "$resume_dev")
+major_hex=$(stat -c '%t' "$resume_dev")
+minor_hex=$(stat -c '%T' "$resume_dev")
+major=$((16#$major_hex))
+minor=$((16#$minor_hex))
+resume_majmin="${major}:${minor}"
+
+default_args=$(grubby --info=DEFAULT | sed -n 's/^args="\(.*\)"$/\1/p')
+[[ -n "$default_args" ]] || fail "could not read kernel args from the default grubby boot entry"
+[[ "$default_args" == *"resume=UUID=$RESUME_UUID"* ]] || fail "default boot entry lacks resume=UUID=$RESUME_UUID"
+[[ "$default_args" == *"resume_offset=$RESUME_OFFSET"* ]] || fail "default boot entry lacks resume_offset=$RESUME_OFFSET"
+
+running_args=$(< /proc/cmdline)
+[[ "$running_args" == *"resume=UUID=$RESUME_UUID"* ]] || fail "running kernel lacks resume=UUID=$RESUME_UUID; reboot before hibernate"
+[[ "$running_args" == *"resume_offset=$RESUME_OFFSET"* ]] || fail "running kernel lacks resume_offset=$RESUME_OFFSET; reboot before hibernate"
+
+printf '%s\n' "$resume_majmin" > /sys/power/resume
+printf '%s\n' "$RESUME_OFFSET" > /sys/power/resume_offset
+printf '%s\n' "$IMAGE_SIZE_BYTES" > /sys/power/image_size
+
+[[ "$(< /sys/power/resume)" == "$resume_majmin" ]] || fail "failed to set /sys/power/resume to $resume_majmin"
+[[ "$(< /sys/power/resume_offset)" == "$RESUME_OFFSET" ]] || fail "failed to set /sys/power/resume_offset to $RESUME_OFFSET"
+
+log "ok mode=$MODE resume=$resume_majmin offset=$RESUME_OFFSET image_size=$IMAGE_SIZE_BYTES swap=${swap_bytes}B"

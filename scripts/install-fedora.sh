@@ -11,6 +11,7 @@ REMOVE_GNOME_EXTENSION=0
 ENABLE_STEAM_WATCHER=1
 ENABLE_IDLE_WATCHER=1
 ENABLE_POWER_GUARD=1
+ENABLE_HIBERNATE_PREFLIGHT=0
 FORCE_HARDWARE=0
 BUILD_RYZENADJ=0
 KEEP_RYZENADJ=0
@@ -38,6 +39,8 @@ Usage: sudo ./scripts/install-fedora.sh [options]
 
 Options:
   --with-gnome-extension       Install the GNOME Shell panel indicator
+  --with-hibernate-preflight   Install the btrfs swapfile hibernate preflight
+                               and its systemd-hibernate drop-ins
   --without-steam-watcher      Do not install or enable the Steam game watcher
   --without-idle-watcher       Do not install or enable the idle overlay watcher
   --without-power-guard        Do not install the update guard timer
@@ -77,6 +80,10 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --with-gnome-extension)
       WITH_GNOME_EXTENSION=1
+      shift
+      ;;
+    --with-hibernate-preflight)
+      ENABLE_HIBERNATE_PREFLIGHT=1
       shift
       ;;
     --without-steam-watcher)
@@ -220,6 +227,10 @@ check_required_tools() {
   if [[ "$WITH_GNOME_EXTENSION" -eq 1 ]]; then
     command -v pkexec >/dev/null 2>&1 || missing_pkgs+=("polkit")
   fi
+  if [[ "$ENABLE_HIBERNATE_PREFLIGHT" -eq 1 ]]; then
+    command -v btrfs >/dev/null 2>&1 || missing_pkgs+=("btrfs-progs")
+    command -v grubby >/dev/null 2>&1 || missing_pkgs+=("grubby")
+  fi
   if [[ "$BUILD_RYZENADJ" -eq 1 ]]; then
     command -v curl >/dev/null 2>&1 || missing_pkgs+=("curl")
     command -v sha256sum >/dev/null 2>&1 || missing_pkgs+=("coreutils")
@@ -356,6 +367,24 @@ install_profile_files() {
     rm -f /etc/systemd/system/elitebook-steam-game-watcher.service
     rm -f /usr/local/sbin/elitebook-steam-game-watcher
   fi
+
+  if [[ "$ENABLE_HIBERNATE_PREFLIGHT" -eq 1 ]]; then
+    install -D -m 0755 "$REPO_DIR/src/elitebook-hibernate-preflight" /usr/local/sbin/elitebook-hibernate-preflight
+    install -D -m 0644 "$REPO_DIR/systemd/systemd-hibernate.service.d/10-elitebook-preflight.conf" \
+      /etc/systemd/system/systemd-hibernate.service.d/10-elitebook-preflight.conf
+    install -D -m 0644 "$REPO_DIR/systemd/systemd-suspend-then-hibernate.service.d/10-elitebook-preflight.conf" \
+      /etc/systemd/system/systemd-suspend-then-hibernate.service.d/10-elitebook-preflight.conf
+    if [[ ! -f /etc/elitebook-hibernate.conf ]]; then
+      install -D -m 0644 "$REPO_DIR/config/elitebook-hibernate.conf.example" /etc/elitebook-hibernate.conf
+      warn "created /etc/elitebook-hibernate.conf from the example; hibernate stays blocked until you fill in your real swapfile values"
+    fi
+  else
+    rm -f /etc/systemd/system/systemd-hibernate.service.d/10-elitebook-preflight.conf
+    rm -f /etc/systemd/system/systemd-suspend-then-hibernate.service.d/10-elitebook-preflight.conf
+    rmdir /etc/systemd/system/systemd-hibernate.service.d >/dev/null 2>&1 || true
+    rmdir /etc/systemd/system/systemd-suspend-then-hibernate.service.d >/dev/null 2>&1 || true
+    rm -f /usr/local/sbin/elitebook-hibernate-preflight
+  fi
 }
 
 install_gnome_extension() {
@@ -431,6 +460,11 @@ print_install_summary() {
   [[ "$ENABLE_STEAM_WATCHER" -eq 1 ]] || echo "Steam game watcher skipped."
   [[ "$ENABLE_IDLE_WATCHER" -eq 1 ]] || echo "Idle overlay watcher skipped."
   [[ "$ENABLE_POWER_GUARD" -eq 1 ]] || echo "Update guard timer skipped."
+
+  if [[ "$ENABLE_HIBERNATE_PREFLIGHT" -eq 1 ]]; then
+    echo "Hibernate preflight installed. Review /etc/elitebook-hibernate.conf and verify with:"
+    echo "  sudo elitebook-hibernate-preflight check-config"
+  fi
 }
 
 remove_owned_ryzenadj() {
@@ -496,6 +530,11 @@ uninstall_profiles() {
   rm -f /etc/systemd/system/elitebook-power-guard.timer
   rm -f /etc/udev/rules.d/90-elitebook-thermal-profile.rules
   rm -f /etc/systemd/system-sleep/elitebook-thermal-profile
+  rm -f /etc/systemd/system/systemd-hibernate.service.d/10-elitebook-preflight.conf
+  rm -f /etc/systemd/system/systemd-suspend-then-hibernate.service.d/10-elitebook-preflight.conf
+  rmdir /etc/systemd/system/systemd-hibernate.service.d >/dev/null 2>&1 || true
+  rmdir /etc/systemd/system/systemd-suspend-then-hibernate.service.d >/dev/null 2>&1 || true
+  rm -f /usr/local/sbin/elitebook-hibernate-preflight
   rm -f /usr/local/sbin/elitebook-steam-game-watcher
   rm -f /usr/local/sbin/elitebook-idle-watcher
   rm -f /usr/local/sbin/elitebook-thermal-profile
@@ -520,6 +559,9 @@ uninstall_profiles() {
     warn "tuned-adm not found; cannot restore tuned balanced profile"
   fi
 
+  if [[ -f /etc/elitebook-hibernate.conf ]]; then
+    echo "Kept /etc/elitebook-hibernate.conf (user configuration); remove it manually if unwanted."
+  fi
   echo "Removed HP AMD Ryzen thermal profile files and restored Fedora power defaults."
 }
 

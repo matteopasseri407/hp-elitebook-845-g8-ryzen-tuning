@@ -51,6 +51,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Run shell tests
         run: tests/test-hardware-guard.sh
+      - name: Run hibernate preflight tests
+        run: tests/test-hibernate-preflight.sh
 
   ruff:
     name: Ruff (Python watchers)

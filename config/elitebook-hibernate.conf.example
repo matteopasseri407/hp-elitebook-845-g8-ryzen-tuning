@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Configuration for elitebook-hibernate-preflight.
+# Copy this file to /etc/elitebook-hibernate.conf and fill in the values for
+# your machine. The preflight refuses to hibernate until every value matches
+# the live system, so a stale value fails closed instead of producing a
+# corrupted resume.
+
+# Absolute path of the btrfs swapfile used for the hibernate image.
+SWAPFILE=/swap/hibernate.swap
+
+# UUID of the btrfs filesystem that holds the swapfile.
+# Find it with:  findmnt -no UUID -T /swap
+RESUME_UUID=00000000-0000-0000-0000-000000000000
+
+# Physical resume offset of the swapfile inside the filesystem.
+# Find it with:  btrfs inspect-internal map-swapfile -r /swap/hibernate.swap
+RESUME_OFFSET=0
+
+# Upper bound for the hibernate image size in bytes. The preflight requires
+# the active swapfile to be at least this size plus 2 GiB of headroom.
+# 20 GiB is a sane default for 32 GB RAM with compression.
+IMAGE_SIZE_BYTES=21474836480

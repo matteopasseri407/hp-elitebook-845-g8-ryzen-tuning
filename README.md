@@ -108,9 +108,12 @@ There is no `stock` profile. On the tested unit, the stock firmware/SMU behavior
 - idle overlay watcher: applies soft/deep idle hints with near-zero polling overhead
 - Steam game watcher: switches to `gaming` only while a real Steam game process is detected
 - update guard timer: remasks conflicting GNOME power profile backends, keeps the custom units enabled, and reapplies `auto` after package/kernel changes without pinning updates
+- optional btrfs swapfile hibernate preflight (`--with-hibernate-preflight`): validates swap layout, resume offset, kernel lockdown, and SELinux state before systemd enters hibernate
 - optional GNOME Shell panel indicator: three human actions (`Auto`, `Game`, `Quiet`) while automatic `ac`, `battery`, `battery-saver`, and idle states remain status-only
 
-The idle watcher is intentionally cheap. It samples aggregate `/proc/stat` and `/proc/loadavg` once per second, does not scan processes, preserves stricter base frequency caps such as `battery-saver`, and calls RyzenAdj only when entering or leaving deep idle. The Steam watcher scans `/proc` only on long intervals and is constrained with low scheduling priority, `CPUQuota=2%`, and `MemoryMax=64M`.
+Battery capacity changes also emit `power_supply` udev events, so on battery the dispatcher re-runs roughly once per battery percent. This is intentional: it is what detects the low-battery threshold crossing without a polling daemon, and the periodic reapply heals SMU limits that firmware events may have reset. Each run is an idempotent oneshot serialized by a dispatcher lock.
+
+The idle watcher is intentionally cheap. It samples aggregate `/proc/stat` and `/proc/loadavg` once per second, does not scan processes, preserves stricter base frequency caps such as `battery-saver`, and calls RyzenAdj only when entering or leaving deep idle. The Steam watcher scans `/proc` only on long intervals and is constrained with low scheduling priority, `CPUQuota=5%`, and `MemoryMax=64M`.
 
 ## Requirements
 
@@ -228,6 +231,14 @@ sudo dnf install cmake gcc-c++ make pciutils-devel curl tar
 sudo ./scripts/install-fedora.sh --build-ryzenadj
 ```
 
+Optional btrfs swapfile hibernate preflight:
+
+```bash
+sudo ./scripts/install-fedora.sh --with-hibernate-preflight
+```
+
+See the Hibernate Preflight section below for the required one-time configuration.
+
 Optional GNOME Shell indicator:
 
 ```bash
@@ -282,6 +293,41 @@ cat /run/elitebook-thermal-profile/guard
 
 If the full RyzenAdj profile cannot be applied after an update, the guard writes `/run/elitebook-thermal-profile/fallback` and applies a direct sysfs fallback: conservative EPP/frequency on battery, or a moderate 3.0 GHz cap on AC. That fallback is meant to preserve thermals and battery until the RyzenAdj/kernel issue is fixed, not as a normal operating mode.
 
+## Hibernate Preflight
+
+Hibernating to a btrfs swapfile is fragile by default: a regenerated swapfile
+silently changes its physical offset, SELinux relabeling can break swap
+activation, and kernel lockdown blocks the resume path. A stale
+`resume_offset` produces a machine that fails to resume or, worse, resumes
+from a corrupted image.
+
+`elitebook-hibernate-preflight` fails closed instead. It runs as
+`ExecStartPre=` of `systemd-hibernate.service` and
+`systemd-suspend-then-hibernate.service` and aborts the hibernate unless
+everything matches the configuration in `/etc/elitebook-hibernate.conf`:
+
+- the configured swapfile is active swap and large enough for the image plus 2 GiB
+- its SELinux type is `swapfile_t` when SELinux is enforcing
+- its current btrfs physical offset still matches the configured `RESUME_OFFSET`
+- kernel lockdown is `none`
+- both the default boot entry and the running kernel carry the matching
+  `resume=UUID=` and `resume_offset=` arguments
+
+On success it programs `/sys/power/resume`, `/sys/power/resume_offset`, and
+`/sys/power/image_size` before systemd continues.
+
+One-time setup after `--with-hibernate-preflight`:
+
+```bash
+sudoedit /etc/elitebook-hibernate.conf   # fill in the values for your machine
+sudo elitebook-hibernate-preflight check-config
+```
+
+The configuration template documents how to derive each value
+(`findmnt -no UUID -T /swap`, `btrfs inspect-internal map-swapfile -r ...`).
+The preflight intentionally targets Fedora-style setups: it uses `grubby` to
+inspect the default boot entry and `btrfs-progs` for the swapfile offset.
+
 ## Uninstall
 
 ```bash
@@ -326,7 +372,7 @@ What this repository adds on top of those building blocks, integrated for HP bus
 - a two-stage idle overlay watcher that respects stricter base profiles such as `battery-saver`
 - a Steam game watcher that scans `/proc` rarely and exits cleanly when no game is running
 - an update guard timer that reapplies profile invariants after `dnf upgrade`, including remasking `tuned-ppd` and `power-profiles-daemon`
-- a hibernate preflight check that validates swap layout, lockdown, and SELinux state before allowing hibernation
+- an opt-in hibernate preflight check that validates swap layout, lockdown, and SELinux state before allowing hibernation
 - a native GNOME Shell extension exposing only three meaningful daily actions (`Auto`, `Game`, `Quiet`)
 - hardened systemd sandboxes with `CapabilityBoundingSet`, `SystemCallFilter`, `MemoryDenyWriteExecute`, `PrivateNetwork`, `ProtectSystem=strict`, and related directives applied to every long-running unit
 
