@@ -279,6 +279,10 @@ boost=on
 max_freq=uncapped
 tuned_profile=balanced
 
+# The stapm values below only take effect on units running with STT disabled.
+# On STT platforms (the 845 G8 included) the firmware rewrites the STAPM limit
+# with the fast limit within about a second of the write, so the sustained
+# envelope is governed by the slow limit. See docs/troubleshooting.md.
 case "$profile" in
   ac)
     epp="balance_power"

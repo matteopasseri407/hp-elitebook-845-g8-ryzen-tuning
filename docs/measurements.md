@@ -52,6 +52,27 @@ Idle behavior is handled as a separate staged overlay instead of baking deep cap
 | `gaming` | Gives the APU more sustained room for Steam games while keeping a lower temperature target than stock. |
 | `cool` | Manual quiet/cool fallback for calls, light work, or hot ambient conditions. |
 
+## STT Owns The STAPM Limit
+
+Measured on 2026-06-11 on the test machine, battery profile active, on battery:
+
+- the dispatcher write succeeds at the SMU mailbox level (`Successfully set
+  stapm_limit to 18000`, SMU reply `0x1`)
+- the very next read, under half a second later, already reports the STAPM
+  limit back at 30 W, which is the profile's fast limit
+- transient readings slightly below 30 W (29.1-29.9 W) appear when the chassis
+  skin temperature rises, matching the STT controller actively managing the
+  value (`STT LIMIT APU` reports 45 C on this machine)
+- fast, slow, APU slow, and Tctl limits never drift
+
+Conclusion: on this platform the firmware Skin Temperature Tracking controller
+owns STAPM and rewrites it continuously, as documented in the RyzenAdj wiki.
+The configured STAPM stage only exists on units with STT disabled; sustained
+power is governed by the slow limit either way. During deep idle the
+STT-managed STAPM follows the lowered fast limit (12 W), which is why idle
+readings can look like the overlay value "held". No re-assert mechanism is
+used because the rewrite happens in well under a second.
+
 ## Battery Incident
 
 On 2026-05-05, the test laptop was left unplugged with an Electron IDE, AI coding assistant, and browser workload open. Logs showed low battery at about 20%, then the system disappeared from the journal near 6% without an orderly shutdown sequence. After reconnecting AC, the laptop booted at about 3% charge.
@@ -68,7 +89,7 @@ The idle watcher is intentionally cheaper than a process monitor:
 - reads only aggregate `/proc/stat` and `/proc/loadavg`
 - no per-process scan in the idle loop
 - no RyzenAdj call during polling; RyzenAdj is called only on deep-idle enter/exit transitions
-- systemd constraints: `Nice=10`, `IOSchedulingClass=idle`, `CPUQuota=2%`, `MemoryMax=64M`
+- systemd constraints: `Nice=10`, `IOSchedulingClass=idle`, `CPUQuota=5%`, `MemoryMax=64M`
 
 On the original Fedora test system, the idle watcher used about 48 ms CPU over 60 seconds and about 7.3 MB RAM. During deep idle with background desktop processes still present, the observed APU/PPT sensor dropped to about 4 W and `k10temp` settled around 57-58 C.
 
@@ -77,7 +98,7 @@ The Steam watcher remains separate and slow:
 - 30 second scan interval when plugged in and Steam is not running
 - 120 second scan interval on battery and Steam is not running
 - 20 second interval while Steam is running
-- systemd constraints: `Nice=10`, `IOSchedulingClass=idle`, `CPUQuota=2%`, `MemoryMax=64M`
+- systemd constraints: `Nice=10`, `IOSchedulingClass=idle`, `CPUQuota=5%`, `MemoryMax=64M`
 
 While a Steam game profile is active the idle overlay watcher is
 suppressed entirely. Short low-CPU windows during cutscenes or loading

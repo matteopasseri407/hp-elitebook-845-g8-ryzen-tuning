@@ -42,6 +42,35 @@ will still use sysfs fallback controls where available:
 The fallback is conservative and keeps the machine usable, but it cannot apply
 the full sustained watt/temperature profile that RyzenAdj normally handles.
 
+## STAPM Limit Reads Back As The Fast Limit
+
+On platforms with Skin Temperature Tracking enabled, including the HP
+EliteBook 845 G8, the firmware STT controller owns the STAPM limit. RyzenAdj
+accepts the write and reports success, but the SMU overwrites the value within
+about one second: STT replaces the STAPM limit with the fast limit, or with
+the STT power value when the chassis skin temperature approaches its limit.
+
+Check whether STT is active:
+
+```bash
+sudo ryzenadj -i | grep "STT LIMIT APU"
+```
+
+A non-zero STT limit means `--stapm-limit` writes will not stick. Measured on
+the 845 G8: a STAPM write of 18 W reads back as 30 W (the fast limit) in under
+half a second, so periodic re-assert loops are pointless and this stack does
+not attempt them.
+
+This does not weaken the profiles. Sustained package power is governed by the
+slow limit, which STT does not touch; the configured STAPM stage simply does
+not exist on STT hardware. The profiles keep setting STAPM because it still
+works on units that run with STT disabled, and because lowering the fast limit
+(as the deep idle overlay does) drags the STT-managed STAPM value down with it.
+
+Upstream reference: the RyzenAdj wiki Renoir tuning guide documents the STT
+overwrite of STAPM, and on Zen3 platforms vendors can additionally clamp PM
+table values while every write still reports success.
+
 ## Unsupported Hardware
 
 The default guard only allows the tested HP EliteBook 845 G8 with Ryzen 7 PRO 5850U.
