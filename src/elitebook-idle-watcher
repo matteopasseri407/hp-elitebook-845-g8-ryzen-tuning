@@ -54,6 +54,9 @@ DEEP_IDLE_DISABLE_BOOST = os.environ.get(
     "off",
 }
 DEEP_IDLE_MAX_FREQ_KHZ = os.environ.get("ELITEBOOK_DEEP_IDLE_MAX_FREQ_KHZ", "1800000")
+# On STT platforms the firmware pins the STAPM limit to the fast limit, so in
+# deep idle the effective STAPM follows DEEP_IDLE_FAST_MW rather than this
+# value. Kept for units with STT disabled. See docs/troubleshooting.md.
 DEEP_IDLE_STAPM_MW = os.environ.get("ELITEBOOK_DEEP_IDLE_STAPM_MW", "10000")
 DEEP_IDLE_FAST_MW = os.environ.get("ELITEBOOK_DEEP_IDLE_FAST_MW", "12000")
 DEEP_IDLE_SLOW_MW = os.environ.get("ELITEBOOK_DEEP_IDLE_SLOW_MW", "6000")
