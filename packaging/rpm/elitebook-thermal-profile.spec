@@ -1,5 +1,5 @@
 Name:           elitebook-thermal-profile
-Version:        0.3.0
+Version:        0.3.1
 Release:        1%{?dist}
 Summary:        Thermal and power profiles for HP AMD Cezanne laptops
 
@@ -176,6 +176,13 @@ fi
 %{_datadir}/gnome-shell/extensions/%{extension_uuid}/
 
 %changelog
+* Thu Jun 11 2026 Matteo Passeri <matteopasseri407@users.noreply.github.com> - 0.3.1-1
+- Document that STT-enabled platforms (845 G8 included) pin the STAPM
+  limit to the fast limit, with measurements and troubleshooting entry;
+  no re-assert mechanism is added because the firmware rewrite happens
+  in under a second
+- Align measured watcher CPUQuota values in the docs with the units (5%)
+
 * Tue Jun 09 2026 Matteo Passeri <matteopasseri407@users.noreply.github.com> - 0.3.0-1
 - Add the btrfs swapfile hibernate preflight with config example and
   systemd-hibernate drop-in examples (inactive by default)
