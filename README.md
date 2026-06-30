@@ -156,7 +156,7 @@ CPU max frequency. That fallback is intentionally conservative; it is not a
 full replacement for SMU tuning.
 
 One SMU value is special: on platforms with Skin Temperature Tracking (STT)
-enabled — the EliteBook 845 G8 itself included — the firmware owns the STAPM
+enabled (the EliteBook 845 G8 itself included), the firmware owns the STAPM
 limit and rewrites it within about a second of any write, so the profiles'
 STAPM stage only takes effect where STT is disabled. Sustained power is
 governed by the slow limit either way. See
