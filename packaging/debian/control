@@ -12,8 +12,7 @@ Architecture: all
 Depends: ${misc:Depends},
          python3,
          systemd,
-         udev,
-         util-linux
+         udev
 Recommends: ryzenadj (>= 0.17.0)
 Suggests: gnome-shell-extension-elitebook-thermal-profile
 Description: thermal and power profiles for HP AMD Cezanne laptops

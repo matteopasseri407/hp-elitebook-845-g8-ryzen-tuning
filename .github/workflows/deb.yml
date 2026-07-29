@@ -51,7 +51,7 @@ jobs:
 
       - name: Lintian
         run: |
-          lintian --fail-on error --no-tag-display-limit dist/*.deb
+          lintian --fail-on error --tag-display-limit 0 dist/*.deb
 
       - name: Install and verify on a real Ubuntu system
         run: |
