@@ -1,3 +1,10 @@
+elitebook-thermal-profile (0.4.1) unstable; urgency=medium
+
+  * Publish the packages as GitHub release assets, built and verified on
+    Ubuntu 24.04 and 26.04.
+
+ -- Matteo Passeri <matteopasseri407@users.noreply.github.com>  Wed, 29 Jul 2026 16:10:00 +0200
+
 elitebook-thermal-profile (0.4.0) unstable; urgency=medium
 
   * Initial Debian and Ubuntu packaging, matching the Fedora RPM layout:

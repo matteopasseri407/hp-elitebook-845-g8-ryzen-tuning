@@ -1,5 +1,5 @@
 Name:           elitebook-thermal-profile
-Version:        0.4.0
+Version:        0.4.1
 Release:        1%{?dist}
 Summary:        Thermal and power profiles for HP AMD Cezanne laptops
 
@@ -176,6 +176,10 @@ fi
 %{_datadir}/gnome-shell/extensions/%{extension_uuid}/
 
 %changelog
+* Wed Jul 29 2026 Matteo Passeri <matteopasseri407@users.noreply.github.com> - 0.4.1-1
+- Add Debian and Ubuntu packaging under packaging/debian, built and verified
+  on Ubuntu runners; the Fedora package is unchanged by this release
+
 * Wed Jul 29 2026 Matteo Passeri <matteopasseri407@users.noreply.github.com> - 0.4.0-1
 - Make the source installer distribution aware: detect the distribution
   family from os-release, map package names per family, and require tuned
