@@ -5,6 +5,40 @@
 [![Fedora COPR](https://img.shields.io/badge/Fedora_COPR-matteo407%2Felitebook--thermal--profile-51A2DA?logo=fedora)](https://copr.fedorainfracloud.org/coprs/matteo407/elitebook-thermal-profile/)
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](LICENSE)
 
+> # ⚠️ Secure Boot must be OFF
+>
+> **With Secure Boot enabled, this project does almost nothing.**
+>
+> Secure Boot puts the kernel in lockdown mode, and lockdown blocks the SMU
+> power-limit writes this entire project is built on. What survives is the EPP
+> hint — the sustained power envelope and the thermal target, the parts that
+> actually stop a laptop cooking at 100 °C, do not get applied.
+>
+> Check before you install:
+>
+> ```bash
+> cat /sys/kernel/security/lockdown    # must read: [none] integrity confidentiality
+> ```
+>
+> If it reads anything else, disable Secure Boot in the firmware first. On HP
+> business laptops: `F10` at boot → Security → Secure Boot → disable.
+>
+> The tool still installs and runs with Secure Boot on: it applies what it can,
+> writes `smu=blocked` in its state file, and tells you it is degraded rather
+> than pretending to work. That is a safety net, not the intended setup.
+> Details and the alternatives in [docs/ubuntu.md](docs/ubuntu.md#before-you-start-secure-boot).
+
+**Is your HP business laptop with an AMD Ryzen sitting at 100 °C on Linux, with
+the fan never stopping, under nothing heavier than an IDE and a browser?** That
+is the problem this repository was built to fix, on real hardware, without
+disabling boost or permanently capping the CPU.
+
+Stock firmware on the tested unit allowed sustained 100-102 °C under ordinary
+development load and relied on thermal throttling to survive it. These profiles
+lower the *sustained* SMU power envelope and the thermal target while leaving
+burst performance intact, so the machine still feels fast and stops living at
+its thermal ceiling.
+
 Thermal and power profiles for selected HP EliteBook and ProBook AMD Ryzen laptops.
 
 The profile values are field-tested on an HP EliteBook 845 G8 with the AMD Ryzen 7 PRO 5850U. Other HP Cezanne models are accepted by the hardware guard only when they match the validated CPU family listed below. Rembrandt models are recognized but intentionally blocked by default until their SMU behavior is validated.
@@ -64,6 +98,30 @@ Without RyzenAdj, the system degrades to sysfs controls for EPP, boost, and CPU
 frequency where the kernel exposes them. See [Supported Hardware](#supported-hardware)
 before enabling services on any machine. Other distributions are not packaged
 yet; see [Related Work](#related-work) and the roadmap.
+
+## Does this apply to your machine?
+
+It probably does if all of these are true:
+
+- an HP EliteBook 835/845 or ProBook 445/455, Ryzen 5000-series PRO APU
+  (Cezanne: 5650U, 5750U, 5850U)
+- running Linux, on Fedora, Ubuntu, or Debian with systemd
+- the CPU package sits at 95-100 °C under sustained load, not just in short
+  bursts, and the fan is audible during ordinary work
+- `sudo ryzenadj -i` reports a stock sustained (slow) limit near 25 W and a
+  Tctl target of 100 °C
+- Secure Boot is off, or you are willing to turn it off
+
+What this is **not**:
+
+- **not an undervolting tool.** It does not touch curve optimizer or voltage
+  offsets, and it cannot make the silicon more efficient.
+- **not a fan-curve controller.** HP firmware owns the fan; this changes how
+  much heat the fan has to remove, not how it spins.
+- **not a general Ryzen tuner.** The hardware guard refuses machines outside
+  the tested list unless you explicitly force it.
+- **not a performance mod.** The point is losing less performance to thermal
+  throttling, not raising limits above stock.
 
 ## Supported Hardware
 
