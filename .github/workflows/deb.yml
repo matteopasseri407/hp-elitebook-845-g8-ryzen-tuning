@@ -122,7 +122,10 @@ jobs:
           elitebook-thermal-profile --version
 
           echo "--- status works without root ---"
-          runuser -u nobody -- elitebook-thermal-profile status >/dev/null
+          # This step runs as the unprivileged runner user, so invoking it
+          # directly is the unprivileged case.
+          test "$(id -u)" -ne 0
+          elitebook-thermal-profile status >/dev/null
 
           echo "--- ryzenadj runs ---"
           ryzenadj --help >/dev/null
