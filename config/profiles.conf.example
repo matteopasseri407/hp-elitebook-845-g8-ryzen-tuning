@@ -1,0 +1,43 @@
+# Profile overrides for elitebook-thermal-profile.
+#
+# Copy to /etc/elitebook-thermal-profile/profiles.conf and edit. Package
+# upgrades never overwrite that file, so changes made here survive updates,
+# unlike editing the installed script.
+#
+# Only write down what you want to change. Anything absent keeps the built-in
+# value, so an empty file behaves exactly like no file at all.
+#
+# Keys are <PROFILE>_<VALUE>:
+#
+#   profiles  AC, PERFORMANCE, BATTERY, BATTERY_SAVER, GAMING, COOL
+#   values    STAPM_MW, FAST_MW, SLOW_MW, APU_MW   power, in milliwatts
+#             TCTL_C                               thermal target, in Celsius
+#             EPP                                  performance,
+#                                                  balance_performance,
+#                                                  balance_power, power
+#
+# Accepted ranges: power 4000-45000 mW, TCTL_C 60-100. A value outside its
+# range, or one that is not a number, is refused with a message on stderr and
+# the built-in default is used instead: a typo here cannot leave the machine
+# untuned, and cannot be used to set a limit the chassis has no chance of
+# dissipating.
+#
+# Raising these numbers above the defaults moves the machine back towards the
+# stock behaviour this project exists to avoid. Lowering them is the safe
+# direction.
+#
+# After editing:
+#   sudo elitebook-thermal-profile auto      # apply
+#   elitebook-thermal-profile status         # confirm what is in force
+#
+# A smaller chassis, or a 6-core part, may not hold the sustained envelope
+# that was measured on an 845 G8 with a Ryzen 7 PRO 5850U:
+#AC_SLOW_MW=15000
+#AC_APU_MW=15000
+
+# A quieter thermal target for calls or hot rooms:
+#COOL_TCTL_C=80
+
+# More conservative battery behaviour:
+#BATTERY_SLOW_MW=12000
+#BATTERY_EPP=power

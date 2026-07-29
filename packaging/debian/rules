@@ -43,6 +43,11 @@ override_dh_auto_install:
 	install -D -m 0644 systemd/elitebook-power-guard.timer $(PKG)$(UNITDIR)/elitebook-power-guard.timer
 
 	install -D -m 0644 udev/90-elitebook-thermal-profile.rules $(PKG)$(UDEVDIR)/90-elitebook-thermal-profile.rules
+
+	# Profile overrides ship fully commented out, so the file does nothing
+	# until edited. Anything under /etc becomes a dpkg conffile, so those
+	# edits survive upgrades, which is the point of shipping it.
+	install -D -m 0644 config/profiles.conf.example $(PKG)/etc/elitebook-thermal-profile/profiles.conf
 	install -D -m 0755 system-sleep/elitebook-thermal-profile $(PKG)$(SLEEPDIR)/elitebook-thermal-profile
 
 	install -d $(GNOME_PKG)$(EXTDIR)

@@ -107,6 +107,26 @@ jobs:
             fi
           done
 
+          echo "--- profile overrides survive upgrades ---"
+          # The whole point of shipping profiles.conf is that user edits are
+          # not overwritten. dpkg only guarantees that for registered
+          # conffiles, so assert it is one rather than assuming.
+          test -f /etc/elitebook-thermal-profile/profiles.conf
+          dpkg-query -W -f='${Conffiles}\n' elitebook-thermal-profile |
+            grep -q "/etc/elitebook-thermal-profile/profiles.conf"
+          # It must also be inert as shipped: every line commented out.
+          if grep -qE "^[^#]" /etc/elitebook-thermal-profile/profiles.conf; then
+            echo "the shipped profiles.conf has active lines; it must do nothing until edited" >&2
+            exit 1
+          fi
+          elitebook-thermal-profile --version
+
+          echo "--- status works without root ---"
+          # This step runs as the unprivileged runner user, so invoking it
+          # directly is the unprivileged case.
+          test "$(id -u)" -ne 0
+          elitebook-thermal-profile status >/dev/null
+
           echo "--- ryzenadj runs ---"
           ryzenadj --help >/dev/null
 
