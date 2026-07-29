@@ -13,6 +13,11 @@ BACKEND_CONF="${ELITEBOOK_BACKEND_CONF:-/etc/elitebook-thermal-profile/backend.c
 OS_RELEASE="${ELITEBOOK_OS_RELEASE:-/etc/os-release}"
 MODE="${1:-repair}"
 
+# Thresholds for the thermal report. Deliberately lenient: brief excursions
+# above the target are normal and expected, a third of the time is not.
+THERMAL_MIN_SAMPLES="${ELITEBOOK_THERMAL_MIN_SAMPLES:-300}"
+THERMAL_OVER_TARGET_PERCENT="${ELITEBOOK_THERMAL_OVER_TARGET_PERCENT:-25}"
+
 # Units that would fight the dispatcher for CPU policy if left running.
 # tuned-ppd only exists on Fedora-like systems; units that are not installed
 # on this machine are skipped rather than masked, so no distribution ends up
@@ -361,6 +366,33 @@ check_smu_state() {
   esac
 }
 
+# The profiles are open loop: nothing checks whether the thermal target is
+# actually being met. The idle watcher records it, so compare here. This only
+# reports - correcting it automatically would mean a second control loop
+# fighting the firmware's own, which is a fight this project does not pick.
+check_thermal_headroom() {
+  local thermal_file="$STATE_DIR/thermal"
+  local samples over target peak percent
+
+  [[ -r "$thermal_file" ]] || return 0
+
+  samples="$(awk -F= '$1 == "samples" {print $2; exit}' "$thermal_file" 2>/dev/null || true)"
+  over="$(awk -F= '$1 == "over_target" {print $2; exit}' "$thermal_file" 2>/dev/null || true)"
+  target="$(awk -F= '$1 == "target_c" {print $2; exit}' "$thermal_file" 2>/dev/null || true)"
+  peak="$(awk -F= '$1 == "peak_c" {print $2; exit}' "$thermal_file" 2>/dev/null || true)"
+
+  [[ "$samples" =~ ^[0-9]+$ && "$over" =~ ^[0-9]+$ ]] || return 0
+  [[ "$target" =~ ^[0-9]+$ && "$target" -gt 0 ]] || return 0
+
+  # Below a few minutes of samples a burst of load says nothing useful.
+  ((samples >= THERMAL_MIN_SAMPLES)) || return 0
+
+  percent=$((over * 100 / samples))
+  ((percent >= THERMAL_OVER_TARGET_PERCENT)) || return 0
+
+  warn "the active profile is not holding its thermal target: ${percent}% of ${samples} samples above ${target} C, peak ${peak:-unknown} C. Consider lowering the sustained limit in the profile configuration."
+}
+
 check_cpufreq_shape() {
   local drivers epp_missing=0 policy
 
@@ -487,6 +519,7 @@ main() {
   reload_udev_rules
   apply_auto_profile
   check_smu_state
+  check_thermal_headroom
   ensure_watchers_active
 
   if ((${#issues[@]} > 0)); then

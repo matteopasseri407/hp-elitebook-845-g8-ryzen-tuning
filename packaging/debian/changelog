@@ -1,3 +1,10 @@
+elitebook-thermal-profile (0.7.0) unstable; urgency=medium
+
+  * Record package temperature against the active profile target and report it
+    in status and from the update guard.
+
+ -- Matteo Passeri <matteopasseri407@users.noreply.github.com>  Wed, 29 Jul 2026 20:05:00 +0200
+
 elitebook-thermal-profile (0.6.0) unstable; urgency=medium
 
   * Add /etc/elitebook-thermal-profile/profiles.conf for per-profile overrides
