@@ -150,8 +150,11 @@ jobs:
       - name: Install packaging tooling
         run: |
           apt-get update
+          # build-essential is an implicit build dependency of every Debian
+          # package; dpkg-checkbuilddeps refuses to start without it.
           apt-get install -y --no-install-recommends \
-            ca-certificates cmake curl debhelper dpkg-dev fakeroot g++ git libpci-dev make tar
+            build-essential ca-certificates cmake curl debhelper dpkg-dev \
+            fakeroot g++ git libpci-dev make tar
 
       - uses: actions/checkout@v4
 
