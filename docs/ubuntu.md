@@ -58,9 +58,21 @@ exactly as it does on Fedora. This is what the development machine runs.
 applies the CPU-level part of every profile — EPP, boost, and the frequency
 cap — writes `smu=blocked` in its state file, and exits successfully. Profile
 switching, the idle overlay, the low-battery guard, and the Steam watcher all
-keep working. What you lose is the SMU power envelope, which on the tested
-machine is what kept it off the 100 °C ceiling under sustained load. Check
-with:
+keep working.
+
+Be realistic about how much that leaves. The everyday profiles (`ac`,
+`battery`, `cool`, `performance`, `gaming`) deliberately keep boost enabled and
+the frequency uncapped, so on those two of the three surviving controls change
+nothing: in practice only the EPP hint is left. The sustained power envelope
+and the thermal target — 18 W instead of the stock 25 W, 90 °C instead of
+100 °C, the numbers that solved the problem on the tested machine — are exactly
+what lockdown blocks.
+
+The one profile that keeps real teeth is `battery-saver`: disabling boost and
+capping frequency to 1.8 GHz needs no SMU access, so the low-battery protection
+works fully with Secure Boot on.
+
+Check with:
 
 ```bash
 grep smu= /run/elitebook-thermal-profile/current
