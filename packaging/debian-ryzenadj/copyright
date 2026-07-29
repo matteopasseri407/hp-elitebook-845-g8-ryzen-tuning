@@ -1,0 +1,27 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: RyzenAdj
+Upstream-Contact: https://github.com/FlyGoat/RyzenAdj/issues
+Source: https://github.com/FlyGoat/RyzenAdj
+
+Files: *
+Copyright: FlyGoat and the RyzenAdj contributors
+License: GPL-2.0-only and LGPL-3.0-only and MIT
+ The upstream tree combines components under the GNU General Public License
+ version 2, the GNU Lesser General Public License version 3, and the MIT
+ license. The LICENSE file shipped in the upstream source is authoritative for
+ the per-component breakdown.
+ .
+ On Debian systems, the complete text of the GNU General Public License version
+ 2 can be found in /usr/share/common-licenses/GPL-2, and the GNU Lesser General
+ Public License version 3 in /usr/share/common-licenses/LGPL-3.
+
+Files: debian/*
+Copyright: 2026 Matteo Passeri
+License: GPL-3.0-or-later
+ This packaging is free software: you can redistribute it and/or modify it under
+ the terms of the GNU General Public License as published by the Free Software
+ Foundation, either version 3 of the License, or (at your option) any later
+ version.
+ .
+ On Debian systems, the complete text of the GNU General Public License version 3
+ can be found in /usr/share/common-licenses/GPL-3.

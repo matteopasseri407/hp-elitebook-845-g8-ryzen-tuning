@@ -1,0 +1,131 @@
+name: Debian packages
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  RYZENADJ_VERSION: "0.17.0"
+  RYZENADJ_SHA256: "848ac9d86ff65d30f5e2c8600aac2613f0f10003b0d6f0e516a54761d7345d44"
+
+jobs:
+  build:
+    name: Build and verify .deb
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install packaging tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake debhelper fakeroot g++ libpci-dev lintian make
+
+      - name: Build elitebook-thermal-profile
+        run: |
+          cp -a packaging/debian debian
+          dpkg-buildpackage -us -uc -b
+          rm -rf debian
+          mkdir -p dist
+          mv ../*.deb dist/
+
+      - name: Build ryzenadj
+        run: |
+          curl -L --fail --show-error --output ryzenadj.tar.gz \
+            "https://github.com/FlyGoat/RyzenAdj/archive/refs/tags/v${RYZENADJ_VERSION}.tar.gz"
+          printf '%s  %s\n' "$RYZENADJ_SHA256" ryzenadj.tar.gz | sha256sum -c -
+          tar -xf ryzenadj.tar.gz
+          cp -a packaging/debian-ryzenadj "RyzenAdj-${RYZENADJ_VERSION}/debian"
+          # win32 sources are irrelevant here and only slow the build down
+          rm -rf "RyzenAdj-${RYZENADJ_VERSION}/win32"
+          (cd "RyzenAdj-${RYZENADJ_VERSION}" && dpkg-buildpackage -us -uc -b)
+          mv ./*.deb dist/
+
+      - name: Lintian
+        run: |
+          lintian --fail-on error --no-tag-display-limit dist/*.deb
+
+      - name: Install and verify on a real Ubuntu system
+        run: |
+          set -euo pipefail
+          # The GNOME indicator needs gnome-shell, which a runner does not have,
+          # so its contents are inspected rather than installed.
+          sudo apt-get install -y ./dist/ryzenadj_*.deb ./dist/elitebook-thermal-profile_*.deb
+
+          echo "--- files landed in distribution paths ---"
+          test -x /usr/bin/elitebook-thermal-profile
+          test -x /usr/bin/elitebook-power-guard
+          test -x /usr/bin/elitebook-idle-watcher
+          test -x /usr/bin/elitebook-steam-game-watcher
+          test -f /usr/lib/systemd/system/elitebook-thermal-profile.service
+          test -f /usr/lib/systemd/system/elitebook-power-guard.timer
+          test -f /usr/lib/udev/rules.d/90-elitebook-thermal-profile.rules
+          test -x /usr/lib/systemd/system-sleep/elitebook-thermal-profile
+
+          echo "--- the hibernate preflight must not ship here ---"
+          test ! -e /usr/bin/elitebook-hibernate-preflight
+
+          echo "--- source-installer paths were rewritten ---"
+          grep -q "/usr/bin/elitebook-thermal-profile" /usr/lib/systemd/system/elitebook-thermal-profile.service
+          if grep -rq "/usr/local/sbin" /usr/bin/elitebook-power-guard \
+            /usr/bin/elitebook-steam-game-watcher \
+            /usr/lib/systemd/system/elitebook-*.service \
+            /usr/lib/systemd/system-sleep/elitebook-thermal-profile; then
+            echo "a /usr/local/sbin path survived packaging" >&2
+            exit 1
+          fi
+
+          echo "--- units ship inert: installing must not tune hardware ---"
+          for unit in elitebook-thermal-profile.service elitebook-idle-watcher.service \
+            elitebook-steam-game-watcher.service elitebook-power-guard.timer; do
+            state="$(systemctl is-enabled "$unit" 2>/dev/null || true)"
+            if [ "$state" != "disabled" ]; then
+              echo "$unit should ship disabled, got '${state:-unknown}'" >&2
+              exit 1
+            fi
+            active="$(systemctl is-active "$unit" 2>/dev/null || true)"
+            if [ "$active" = "active" ]; then
+              echo "$unit must not be started by package installation" >&2
+              exit 1
+            fi
+          done
+
+          echo "--- ryzenadj runs ---"
+          ryzenadj --help >/dev/null
+
+          echo "--- the dispatcher refuses unsupported hardware ---"
+          if elitebook-thermal-profile --check-hardware >/dev/null 2>&1; then
+            echo "hardware guard passed on a GitHub runner, which is not an EliteBook" >&2
+            exit 1
+          fi
+
+          echo "--- GNOME indicator package contents ---"
+          dpkg -c dist/gnome-shell-extension-elitebook-thermal-profile_*.deb |
+            grep -q "usr/share/gnome-shell/extensions/elitebook-thermal-profile@matteopasseri.github.io/extension.js"
+
+      - name: Verify removal is clean
+        run: |
+          set -euo pipefail
+          sudo apt-get purge -y elitebook-thermal-profile
+          test ! -e /usr/bin/elitebook-thermal-profile
+          test ! -e /usr/lib/systemd/system/elitebook-thermal-profile.service
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: debian-packages
+          path: dist/*.deb
+          if-no-files-found: error
+
+      - name: Attach packages to the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${GITHUB_REF_NAME}" dist/*.deb --clobber

@@ -1,0 +1,12 @@
+elitebook-thermal-profile (0.4.0) unstable; urgency=medium
+
+  * Initial Debian and Ubuntu packaging, matching the Fedora RPM layout:
+    binaries under /usr/bin, units under /usr/lib/systemd/system, udev rules
+    under /usr/lib/udev/rules.d.
+  * Ship the GNOME Shell indicator as a separate binary package.
+  * Do not enable or start any unit on installation; hardware tuning stays
+    explicit, as it does for the RPM.
+  * Omit the hibernate preflight, which inspects Fedora-style boot entries with
+    grubby and checks an SELinux label.
+
+ -- Matteo Passeri <matteopasseri407@users.noreply.github.com>  Wed, 29 Jul 2026 15:24:46 +0200

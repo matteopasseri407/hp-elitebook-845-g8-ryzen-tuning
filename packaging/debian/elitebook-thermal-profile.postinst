@@ -1,0 +1,27 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
+set -e
+
+if [ "$1" = "configure" ]; then
+  cat <<'EOF'
+elitebook-thermal-profile installed.
+
+Nothing has been enabled. Check that your machine is on the supported hardware
+list, then enable the units explicitly:
+  sudo systemctl enable --now elitebook-thermal-profile.service
+  sudo systemctl enable --now elitebook-idle-watcher.service
+  sudo systemctl enable --now elitebook-steam-game-watcher.service
+  sudo systemctl enable --now elitebook-power-guard.timer
+  sudo systemctl start elitebook-power-guard.service
+
+Full SMU control needs RyzenAdj, which Debian and Ubuntu do not package.
+Without it, only EPP, boost, and CPU frequency controls apply.
+
+Secure Boot puts the kernel in lockdown, which blocks the SMU writes this
+package is built around. Check with: cat /sys/kernel/security/lockdown
+EOF
+fi
+
+#DEBHELPER#
+
+exit 0
