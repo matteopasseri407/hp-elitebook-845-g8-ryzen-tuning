@@ -18,10 +18,14 @@ jobs:
   build:
     name: Build and verify .deb
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@v4
+
+      - name: Record the build platform
+        run: |
+          . /etc/os-release
+          echo "Building on ${PRETTY_NAME}"
+          echo "UBUNTU_SUFFIX=ubuntu${VERSION_ID}" >>"$GITHUB_ENV"
 
       - name: Install packaging tooling
         run: |
@@ -46,6 +50,11 @@ jobs:
           cp -a packaging/debian-ryzenadj "RyzenAdj-${RYZENADJ_VERSION}/debian"
           # win32 sources are irrelevant here and only slow the build down
           rm -rf "RyzenAdj-${RYZENADJ_VERSION}/win32"
+          # RyzenAdj is compiled, so the binary is tied to the release it was
+          # built on. Tag the version with that release rather than shipping an
+          # unlabelled .deb that users cannot tell apart.
+          sed -i "1s/(${RYZENADJ_VERSION}-1)/(${RYZENADJ_VERSION}-1~${UBUNTU_SUFFIX})/" \
+            "RyzenAdj-${RYZENADJ_VERSION}/debian/changelog"
           (cd "RyzenAdj-${RYZENADJ_VERSION}" && dpkg-buildpackage -us -uc -b)
           mv ./*.deb dist/
 
@@ -107,6 +116,12 @@ jobs:
             exit 1
           fi
 
+          echo "--- the power guard reports the sysfs-only backend here ---"
+          # check exits non-zero on a runner (no amd-pstate, no dispatcher
+          # state), so capture the output instead of piping under pipefail.
+          guard_output="$(elitebook-power-guard check 2>&1 || true)"
+          echo "$guard_output" | grep -q "no tuned backend configured"
+
           echo "--- GNOME indicator package contents ---"
           dpkg -c dist/gnome-shell-extension-elitebook-thermal-profile_*.deb |
             grep -q "usr/share/gnome-shell/extensions/elitebook-thermal-profile@matteopasseri.github.io/extension.js"
@@ -124,8 +139,76 @@ jobs:
           path: dist/*.deb
           if-no-files-found: error
 
-      - name: Attach packages to the release
-        if: startsWith(github.ref, 'refs/tags/v')
+  ryzenadj-next:
+    # The runner image trails the current Ubuntu release, and RyzenAdj is
+    # compiled, so a binary built on the runner is not automatically the right
+    # one for a newer release. Build and smoke-test it there too.
+    name: Build ryzenadj on Ubuntu 26.04
+    runs-on: ubuntu-latest
+    container: ubuntu:26.04
+    steps:
+      - name: Install packaging tooling
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            ca-certificates cmake curl debhelper dpkg-dev fakeroot g++ git libpci-dev make tar
+
+      - uses: actions/checkout@v4
+
+      - name: Confirm the build platform
+        run: |
+          . /etc/os-release
+          echo "Building on ${PRETTY_NAME}"
+          case "${VERSION_ID}" in
+            26.04) ;;
+            *) echo "expected Ubuntu 26.04, got ${VERSION_ID}" >&2; exit 1 ;;
+          esac
+
+      - name: Build ryzenadj
+        run: |
+          curl -L --fail --show-error --output ryzenadj.tar.gz \
+            "https://github.com/FlyGoat/RyzenAdj/archive/refs/tags/v${RYZENADJ_VERSION}.tar.gz"
+          printf '%s  %s\n' "$RYZENADJ_SHA256" ryzenadj.tar.gz | sha256sum -c -
+          tar -xf ryzenadj.tar.gz
+          cp -a packaging/debian-ryzenadj "RyzenAdj-${RYZENADJ_VERSION}/debian"
+          rm -rf "RyzenAdj-${RYZENADJ_VERSION}/win32"
+          sed -i "1s/(${RYZENADJ_VERSION}-1)/(${RYZENADJ_VERSION}-1~ubuntu26.04)/" \
+            "RyzenAdj-${RYZENADJ_VERSION}/debian/changelog"
+          (cd "RyzenAdj-${RYZENADJ_VERSION}" && dpkg-buildpackage -us -uc -b)
+          mkdir -p dist
+          mv ./*.deb dist/
+
+      - name: Install and verify the binary runs
+        run: |
+          set -eu
+          apt-get install -y ./dist/ryzenadj_*.deb
+          ryzenadj --help >/dev/null
+          # A missing shared library would surface here rather than on a user's
+          # laptop the first time a profile is applied.
+          ldd /usr/bin/ryzenadj
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ryzenadj-ubuntu-26.04
+          path: dist/*.deb
+          if-no-files-found: error
+
+  release:
+    name: Attach packages to the release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build, ryzenadj-next]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Upload
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "${GITHUB_REF_NAME}" dist/*.deb --clobber
+          GH_REPO: ${{ github.repository }}
+        run: |
+          find artifacts -name "*.deb" -print
+          # shellcheck disable=SC2046
+          gh release upload "${GITHUB_REF_NAME}" $(find artifacts -name "*.deb") --clobber
