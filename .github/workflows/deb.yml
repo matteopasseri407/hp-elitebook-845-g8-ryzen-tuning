@@ -143,13 +143,16 @@ jobs:
           sudo install -D -m 0755 /bin/true /usr/local/sbin/elitebook-thermal-profile
           # dpkg --configure is a no-op on an already configured package, so
           # run the maintainer script directly to exercise the warning.
-          if ! sudo /var/lib/dpkg/info/elitebook-thermal-profile.postinst configure 2>&1 |
-            grep -q "a source installation is also present"; then
+          # Capture the output rather than piping it: grep -q closes the pipe
+          # on the first match, and under pipefail the resulting SIGPIPE would
+          # look like a failure even when the warning was printed.
+          postinst_output="$(sudo /var/lib/dpkg/info/elitebook-thermal-profile.postinst configure 2>&1 || true)"
+          sudo rm -f /usr/local/sbin/elitebook-thermal-profile
+          if ! echo "$postinst_output" | grep -q "a source installation is also present"; then
             echo "the package did not warn about the coexisting source install" >&2
-            sudo rm -f /usr/local/sbin/elitebook-thermal-profile
+            echo "postinst said: $postinst_output" >&2
             exit 1
           fi
-          sudo rm -f /usr/local/sbin/elitebook-thermal-profile
 
       - name: Verify removal is clean
         run: |
