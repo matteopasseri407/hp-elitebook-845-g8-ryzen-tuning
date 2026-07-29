@@ -1,5 +1,5 @@
 Name:           elitebook-thermal-profile
-Version:        0.5.0
+Version:        0.6.0
 Release:        1%{?dist}
 Summary:        Thermal and power profiles for HP AMD Cezanne laptops
 
@@ -105,6 +105,12 @@ install -Dm0644 systemd/systemd-suspend-then-hibernate.service.d/10-elitebook-pr
 install -Dm0644 config/elitebook-hibernate.conf.example \
   %{buildroot}%{_datadir}/%{name}/examples/elitebook-hibernate.conf.example
 
+# Profile overrides ship fully commented out, so the file is inert until the
+# user edits it. Marked %config(noreplace) so those edits survive upgrades,
+# which is the whole point of having it.
+install -Dm0644 config/profiles.conf.example \
+  %{buildroot}%{_sysconfdir}/%{name}/profiles.conf
+
 sed -i \
   -e 's#/usr/local/sbin#%{_bindir}#g' \
   %{buildroot}%{_unitdir}/elitebook-*.service \
@@ -157,6 +163,8 @@ fi
 %files
 %license LICENSE
 %doc README.md docs
+%dir %{_sysconfdir}/%{name}
+%config(noreplace) %{_sysconfdir}/%{name}/profiles.conf
 %{_bindir}/elitebook-thermal-profile
 %{_bindir}/elitebook-idle-watcher
 %{_bindir}/elitebook-power-guard

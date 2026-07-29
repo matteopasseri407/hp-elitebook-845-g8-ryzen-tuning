@@ -2,6 +2,10 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 set -euo pipefail
 
+# Keep in step with packaging/rpm/elitebook-thermal-profile.spec and
+# packaging/debian/changelog; tests/test-version-consistency.sh enforces it.
+ELITEBOOK_VERSION="0.6.0"
+
 STATE_DIR="${ELITEBOOK_THERMAL_STATE_DIR:-/run/elitebook-thermal-profile}"
 STATE_FILE="$STATE_DIR/current"
 LOCK_FILE="$STATE_DIR/dispatcher.lock"
@@ -10,18 +14,40 @@ DMI_ID_DIR="${ELITEBOOK_DMI_ID_DIR:-/sys/class/dmi/id}"
 CPUINFO_PATH="${ELITEBOOK_CPUINFO_PATH:-/proc/cpuinfo}"
 CPUFREQ_DIR="${ELITEBOOK_CPUFREQ_DIR:-/sys/devices/system/cpu/cpufreq}"
 LOCKDOWN_PATH="${ELITEBOOK_LOCKDOWN_PATH:-/sys/kernel/security/lockdown}"
+PROFILE_CONF="${ELITEBOOK_PROFILE_CONF:-/etc/elitebook-thermal-profile/profiles.conf}"
+HWMON_DIR="${ELITEBOOK_HWMON_DIR:-/sys/class/hwmon}"
 
 DETECTED_PRODUCT=""
 DETECTED_CPU=""
 
 usage() {
-  cat >&2 <<'EOF'
-Usage: elitebook-thermal-profile [auto|ac|performance|battery|battery-saver|gaming|cool|--check-hardware]
+  cat >&2 <<EOF
+Usage: elitebook-thermal-profile [COMMAND]
+
+Profiles (need root):
+  auto              Pick by power source and battery level
+  ac                Plugged in
+  performance       Plugged in, more responsive
+  battery           Unplugged
+  battery-saver     Unplugged and low, or forced
+  gaming            More sustained headroom
+  cool              Quiet and cool
+
+Commands:
+  status            Show what is applied right now (no root needed)
+  --check-hardware  Verify this machine is supported
+  --version         Print the version
+  -h, --help        Show this help
+
+Configuration:
+  $PROFILE_CONF
+  Overrides individual profile values and survives package upgrades.
+  See docs/configuration.md.
 
 Environment:
   RYZENADJ=/path/to/ryzenadj
   ELITEBOOK_PROFILE_SOURCE=manual|auto|system-auto|steam-game-watcher
-  ELITEBOOK_THERMAL_FORCE=1   skip the HP EliteBook 845 G8 / Ryzen 7 PRO 5850U guard
+  ELITEBOOK_THERMAL_FORCE=1   skip the supported-hardware guard
   ELITEBOOK_LOW_BATTERY_THRESHOLD=20
   ELITEBOOK_BATTERY_SAVER_MAX_FREQ_KHZ=1800000
 EOF
@@ -123,6 +149,129 @@ battery_is_low() {
   [[ "$capacity" -le "$threshold" ]]
 }
 
+# CPU package temperature. k10temp is the in-tree driver; zenpower is a common
+# out-of-tree replacement for it on Ryzen systems, and a machine running that
+# one has no k10temp at all, so both are accepted.
+cpu_temperature_c() {
+  local wanted hwmon name temp
+
+  for wanted in k10temp zenpower; do
+    for hwmon in "$HWMON_DIR"/hwmon*; do
+      [[ -r "$hwmon/name" ]] || continue
+      name="$(read_trimmed "$hwmon/name")"
+      [[ "$name" = "$wanted" ]] || continue
+      [[ -r "$hwmon/temp1_input" ]] || continue
+      temp="$(read_trimmed "$hwmon/temp1_input")"
+      is_uint "$temp" || continue
+      echo $((temp / 1000))
+      return 0
+    done
+  done
+
+  return 1
+}
+
+# Human-readable view of what the dispatcher last did. Deliberately runs
+# without root: it only reads the state file and sysfs, and it is the first
+# thing to reach for when the laptop is not behaving as expected.
+print_status() {
+  local profile source smu epp boost max_freq updated
+  local stapm fast slow apu tctl battery temp freq_text
+
+  if [[ ! -r "$STATE_FILE" ]]; then
+    echo "No profile has been applied yet (no state file at $STATE_FILE)."
+    echo "Apply one with: sudo elitebook-thermal-profile auto"
+    return 0
+  fi
+
+  profile="$(current_value profile)"
+  source="$(current_value source)"
+  smu="$(current_value smu)"
+  epp="$(current_value epp)"
+  boost="$(current_value boost)"
+  max_freq="$(current_value max_freq)"
+  stapm="$(current_value stapm_mw)"
+  fast="$(current_value fast_mw)"
+  slow="$(current_value slow_mw)"
+  apu="$(current_value apu_mw)"
+  tctl="$(current_value tctl_c)"
+  updated="$(current_value updated)"
+
+  case "$source" in
+    manual) source="set manually" ;;
+    auto) source="automatic (AC/battery)" ;;
+    system-auto) source="system automation" ;;
+    steam-game-watcher) source="Steam game detected" ;;
+    guard-fallback) source="update guard fallback" ;;
+    "") source="unknown" ;;
+  esac
+
+  if [[ "$max_freq" = "uncapped" || -z "$max_freq" ]]; then
+    freq_text="uncapped"
+  else
+    freq_text="$((max_freq / 1000)) MHz"
+  fi
+
+  printf 'Profile:      %s (%s)\n' "${profile:-unknown}" "$source"
+
+  case "$smu" in
+    ok)
+      printf 'SMU limits:   applied\n'
+      ;;
+    unavailable)
+      printf 'SMU limits:   NOT applied - RyzenAdj is not installed\n'
+      ;;
+    blocked)
+      printf 'SMU limits:   NOT applied - blocked by kernel lockdown (Secure Boot)\n'
+      ;;
+    failed)
+      printf 'SMU limits:   NOT applied - RyzenAdj returned an error\n'
+      ;;
+    *)
+      printf 'SMU limits:   unknown (state written by an older version)\n'
+      ;;
+  esac
+
+  printf 'CPU policy:   EPP %s, boost %s, max frequency %s\n' \
+    "${epp:-unknown}" "${boost:-unknown}" "$freq_text"
+
+  case "$smu" in
+    ok)
+      printf 'Power limits: sustained %s W, burst %s W, thermal target %s C\n' \
+        "$((${slow:-0} / 1000))" "$((${fast:-0} / 1000))" "${tctl:-?}"
+      ;;
+    "")
+      # State from a version that predates SMU reporting. Do not claim the
+      # limits failed: on such a machine they were almost certainly applied.
+      printf 'Power limits: recorded %s W sustained, %s W burst, %s C target\n' \
+        "$((${slow:-0} / 1000))" "$((${fast:-0} / 1000))" "${tctl:-?}"
+      ;;
+    *)
+      printf 'Power limits: requested %s W sustained / %s W burst / %s C, NOT in force\n' \
+        "$((${slow:-0} / 1000))" "$((${fast:-0} / 1000))" "${tctl:-?}"
+      ;;
+  esac
+
+  battery="$(battery_capacity || true)"
+  if [[ -n "$battery" ]]; then
+    if on_ac_power; then
+      printf 'Battery:      %s%% (on AC)\n' "$battery"
+    else
+      printf 'Battery:      %s%% (on battery)\n' "$battery"
+    fi
+  fi
+
+  temp="$(cpu_temperature_c || true)"
+  [[ -n "$temp" ]] && printf 'CPU temp:     %s C\n' "$temp"
+
+  printf 'Updated:      %s\n' "${updated:-unknown}"
+
+  if [[ -n "$smu" && "$smu" != "ok" ]]; then
+    printf '\nThis machine is running on CPU policy alone. See:\n'
+    printf '  https://github.com/matteopasseri407/hp-elitebook-845-g8-ryzen-tuning/blob/main/docs/troubleshooting.md\n'
+  fi
+}
+
 find_ryzenadj() {
   local candidate
 
@@ -220,6 +369,79 @@ current_value() {
   awk -F= -v key="$key" '$1 == key {print $2; exit}' "$STATE_FILE" 2>/dev/null || true
 }
 
+# Reads one key from the profile configuration file. The file is parsed, never
+# sourced: a stray line in it must not be able to run commands as root.
+profile_conf_value() {
+  local key="$1" value
+
+  [[ -r "$PROFILE_CONF" ]] || return 1
+
+  value="$(sed -n "s/^[[:space:]]*${key}[[:space:]]*=[[:space:]]*//p" "$PROFILE_CONF" | tail -n 1)"
+  value="${value%%#*}"
+  value="${value//[[:space:]]/}"
+  [[ -n "$value" ]] || return 1
+
+  printf '%s' "$value"
+}
+
+# Power limits are exactly the numbers that cook a laptop when copied from a
+# desktop guide, so overrides are clamped to a range the tested chassis can
+# survive. A rejected value keeps the built-in default: a typo in this file
+# must never leave the machine running untuned.
+override_uint() {
+  local key="$1" min="$2" max="$3" current="$4" value
+
+  value="$(profile_conf_value "$key")" || { printf '%s' "$current"; return; }
+
+  if ! is_uint "$value"; then
+    echo "elitebook-thermal-profile: warning: $PROFILE_CONF: $key='$value' is not an integer; keeping $current" >&2
+    printf '%s' "$current"
+    return
+  fi
+
+  if ((value < min || value > max)); then
+    echo "elitebook-thermal-profile: warning: $PROFILE_CONF: $key=$value is outside the safe range ${min}-${max}; keeping $current" >&2
+    printf '%s' "$current"
+    return
+  fi
+
+  printf '%s' "$value"
+}
+
+override_epp() {
+  local key="$1" current="$2" value
+
+  value="$(profile_conf_value "$key")" || { printf '%s' "$current"; return; }
+
+  case "$value" in
+    performance|balance_performance|balance_power|power)
+      printf '%s' "$value"
+      ;;
+    *)
+      echo "elitebook-thermal-profile: warning: $PROFILE_CONF: $key='$value' is not a valid EPP hint; keeping $current" >&2
+      printf '%s' "$current"
+      ;;
+  esac
+}
+
+# Per-profile overrides, keyed by profile name: AC_SLOW_MW, COOL_TCTL_C,
+# BATTERY_SAVER_EPP and so on. Anything absent keeps the built-in value, so a
+# user only writes down what they want to change.
+apply_profile_overrides() {
+  local prefix
+
+  [[ -r "$PROFILE_CONF" ]] || return 0
+
+  prefix="$(printf '%s' "$1" | tr '[:lower:]' '[:upper:]' | tr '-' '_')"
+
+  stapm="$(override_uint "${prefix}_STAPM_MW" 4000 45000 "$stapm")"
+  fast="$(override_uint "${prefix}_FAST_MW" 4000 45000 "$fast")"
+  slow="$(override_uint "${prefix}_SLOW_MW" 4000 45000 "$slow")"
+  apu="$(override_uint "${prefix}_APU_MW" 4000 45000 "$apu")"
+  tctl="$(override_uint "${prefix}_TCTL_C" 60 100 "$tctl")"
+  epp="$(override_epp "${prefix}_EPP" "$epp")"
+}
+
 write_state() {
   local battery_percent tmp
   battery_percent="$(battery_capacity || true)"
@@ -243,10 +465,22 @@ write_state() {
 
 requested_profile="${1:-auto}"
 
-if [[ "$requested_profile" = "--help" || "$requested_profile" = "-h" ]]; then
-  usage
-  exit 0
-fi
+# These answer questions about the machine rather than changing it, so they
+# run before the hardware guard and without root.
+case "$requested_profile" in
+  --help|-h)
+    usage
+    exit 0
+    ;;
+  --version)
+    echo "elitebook-thermal-profile $ELITEBOOK_VERSION"
+    exit 0
+    ;;
+  status)
+    print_status
+    exit 0
+    ;;
+esac
 
 assert_supported_hardware
 
@@ -273,6 +507,8 @@ if [[ "${EUID}" -ne 0 ]]; then
     ELITEBOOK_CPUFREQ_DIR="${ELITEBOOK_CPUFREQ_DIR:-}" \
     ELITEBOOK_LOCKDOWN_PATH="${ELITEBOOK_LOCKDOWN_PATH:-}" \
     ELITEBOOK_RYZENADJ_SEARCH_PATHS="${ELITEBOOK_RYZENADJ_SEARCH_PATHS:-}" \
+    ELITEBOOK_PROFILE_CONF="${ELITEBOOK_PROFILE_CONF:-}" \
+    ELITEBOOK_HWMON_DIR="${ELITEBOOK_HWMON_DIR:-}" \
     "$0" "$@"
 fi
 
@@ -399,6 +635,8 @@ case "$profile" in
     exit 2
     ;;
 esac
+
+apply_profile_overrides "$profile"
 
 if command -v tuned-adm >/dev/null 2>&1; then
   current_tuned_profile=""

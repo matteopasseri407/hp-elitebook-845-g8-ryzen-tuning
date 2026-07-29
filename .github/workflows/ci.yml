@@ -57,6 +57,10 @@ jobs:
         run: tests/test-platform-detection.sh
       - name: Run SMU fallback tests
         run: tests/test-smu-fallback.sh
+      - name: Run profile configuration tests
+        run: tests/test-profile-config.sh
+      - name: Run version consistency tests
+        run: tests/test-version-consistency.sh
 
   ruff:
     name: Ruff (Python watchers)

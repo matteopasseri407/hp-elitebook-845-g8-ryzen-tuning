@@ -399,13 +399,41 @@ Manual profiles intentionally win over system automation. Running `sudo eliteboo
 
 Low-battery protection is the exception: when the systemd/udev automation sees the battery at or below the threshold, it may override an active manual or Steam profile and apply `battery-saver`. This protects unattended systems from continuing a high-power workload until firmware cutoff.
 
-Current state is exposed at:
+To see what is actually in force, including whether the SMU limits reached the
+hardware and the current package temperature:
+
+```bash
+elitebook-thermal-profile status
+```
+
+That needs no root. The raw state files are also readable directly:
 
 ```bash
 cat /run/elitebook-thermal-profile/current
 cat /run/elitebook-thermal-profile/idle-watcher
 cat /run/elitebook-thermal-profile/guard
 ```
+
+## Changing the profile values
+
+The built-in numbers were measured on one machine. To use different ones, edit
+`/etc/elitebook-thermal-profile/profiles.conf` rather than the installed
+script: it is a configuration file in both packages, so upgrades will not
+overwrite it.
+
+```ini
+# a smaller chassis that cannot hold the tested sustained envelope
+AC_SLOW_MW=15000
+AC_APU_MW=15000
+```
+
+```bash
+sudo elitebook-thermal-profile auto
+elitebook-thermal-profile status
+```
+
+Values outside a safe range are refused with a message and the built-in
+default is kept. Full reference: [docs/configuration.md](docs/configuration.md).
 
 ## Update Guard
 

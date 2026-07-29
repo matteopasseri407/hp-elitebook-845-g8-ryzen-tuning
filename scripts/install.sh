@@ -513,6 +513,11 @@ install_profile_files() {
   install -D -m 0644 "$REPO_DIR/udev/90-elitebook-thermal-profile.rules" /etc/udev/rules.d/90-elitebook-thermal-profile.rules
   install -D -m 0755 "$REPO_DIR/system-sleep/elitebook-thermal-profile" /etc/systemd/system-sleep/elitebook-thermal-profile
 
+  # Never overwrite profile overrides the user has already edited.
+  if [[ ! -f "$BACKEND_CONF_DIR/profiles.conf" ]]; then
+    install -D -m 0644 "$REPO_DIR/config/profiles.conf.example" "$BACKEND_CONF_DIR/profiles.conf"
+  fi
+
   if [[ "$ENABLE_POWER_GUARD" -eq 1 ]]; then
     install -D -m 0755 "$REPO_DIR/src/elitebook-power-guard" /usr/local/sbin/elitebook-power-guard
     install -D -m 0644 "$REPO_DIR/systemd/elitebook-power-guard.service" /etc/systemd/system/elitebook-power-guard.service
@@ -777,6 +782,10 @@ uninstall_profiles() {
   remove_gnome_extension
 
   rm -f "$BACKEND_CONF"
+  # Profile overrides are the user's own tuning, not installer state.
+  if [[ -f "$BACKEND_CONF_DIR/profiles.conf" ]]; then
+    echo "Kept $BACKEND_CONF_DIR/profiles.conf (your profile overrides); remove it manually if unwanted."
+  fi
   rmdir "$BACKEND_CONF_DIR" >/dev/null 2>&1 || true
 
   systemctl unmask power-profiles-daemon.service tuned-ppd.service >/dev/null 2>&1 || true

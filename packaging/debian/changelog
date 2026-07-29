@@ -1,3 +1,11 @@
+elitebook-thermal-profile (0.6.0) unstable; urgency=medium
+
+  * Add /etc/elitebook-thermal-profile/profiles.conf for per-profile overrides
+    that survive package upgrades.
+  * Add the status command and --version.
+
+ -- Matteo Passeri <matteopasseri407@users.noreply.github.com>  Wed, 29 Jul 2026 19:05:00 +0200
+
 elitebook-thermal-profile (0.5.0) unstable; urgency=medium
 
   * Apply the CPU-level part of a profile even when RyzenAdj is missing or
