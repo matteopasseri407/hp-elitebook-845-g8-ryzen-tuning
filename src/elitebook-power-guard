@@ -9,8 +9,14 @@ POWER_SUPPLY_DIR="${ELITEBOOK_POWER_SUPPLY_DIR:-/sys/class/power_supply}"
 THERMAL_PROFILE="${ELITEBOOK_THERMAL_PROFILE_BIN:-/usr/local/sbin/elitebook-thermal-profile}"
 UDEV_RULE="/etc/udev/rules.d/90-elitebook-thermal-profile.rules"
 SLEEP_HOOK="/etc/systemd/system-sleep/elitebook-thermal-profile"
+BACKEND_CONF="${ELITEBOOK_BACKEND_CONF:-/etc/elitebook-thermal-profile/backend.conf}"
+OS_RELEASE="${ELITEBOOK_OS_RELEASE:-/etc/os-release}"
 MODE="${1:-repair}"
 
+# Units that would fight the dispatcher for CPU policy if left running.
+# tuned-ppd only exists on Fedora-like systems; units that are not installed
+# on this machine are skipped rather than masked, so no distribution ends up
+# with dangling masks for software it never had.
 MASKED_UNITS=(
   tuned-ppd.service
   power-profiles-daemon.service
@@ -35,7 +41,7 @@ Usage: elitebook-power-guard [check|repair]
 check   Verify guardrails and exit non-zero if anything is wrong.
 repair  Reapply safe guardrails, start missing services, and reapply auto.
 
-This guard intentionally does not pin kernels or block Fedora package updates.
+This guard intentionally does not pin kernels or block distribution updates.
 It only repairs the local invariants needed by the EliteBook thermal profiles.
 EOF
 }
@@ -107,6 +113,61 @@ unit_active_state() {
   systemctl is-active "$1" 2>/dev/null || true
 }
 
+# Distribution family, used only as a fallback when the installer did not
+# record which power backend this machine is supposed to have.
+os_release_family() {
+  local parsed=""
+
+  if [[ -r "$OS_RELEASE" ]]; then
+    # Sourced in a subshell so ID/ID_LIKE never leak into the guard itself.
+    # shellcheck disable=SC1090
+    parsed="$(. "$OS_RELEASE" >/dev/null 2>&1 && printf '%s %s' "${ID:-}" "${ID_LIKE:-}")" || parsed=""
+  fi
+
+  printf '%s' "$parsed"
+}
+
+# tuned is the expected backend on Fedora/RHEL, where the dispatcher hands it
+# the balanced/powersave profile. Debian and Ubuntu ship power-profiles-daemon
+# instead and have no tuned by default: there the dispatcher drives CPU policy
+# directly through sysfs and SMU, and a missing tuned is not a fault.
+detect_expected_backend() {
+  case " $(os_release_family) " in
+    *" fedora "*|*" rhel "*|*" centos "*)
+      echo tuned
+      ;;
+    *)
+      if unit_exists tuned.service; then
+        echo tuned
+      else
+        echo none
+      fi
+      ;;
+  esac
+}
+
+# The installer records the backend it configured. An explicit value keeps the
+# guard honest: on a Fedora install that suddenly lost tuned we still report a
+# regression, instead of silently downgrading to sysfs-only control.
+configured_power_backend() {
+  local configured=""
+
+  if [[ -r "$BACKEND_CONF" ]]; then
+    configured="$(sed -n 's/^[[:space:]]*POWER_BACKEND[[:space:]]*=[[:space:]]*//p' "$BACKEND_CONF" | tail -n 1)"
+    configured="${configured%\"}"
+    configured="${configured#\"}"
+  fi
+
+  case "$configured" in
+    tuned|none)
+      echo "$configured"
+      ;;
+    *)
+      detect_expected_backend
+      ;;
+  esac
+}
+
 write_guard_state() {
   local status="$1"
   local tmp
@@ -138,6 +199,11 @@ ensure_masked_units() {
       continue
     fi
 
+    # Not installed on this distribution: nothing can start, nothing to mask.
+    if ! unit_exists "$unit"; then
+      continue
+    fi
+
     if [[ "$MODE" = "check" ]]; then
       warn "$unit is not masked"
       continue
@@ -152,8 +218,15 @@ ensure_masked_units() {
   done
 }
 
-ensure_tuned() {
-  local state
+ensure_power_backend() {
+  local backend state
+
+  backend="$(configured_power_backend)"
+
+  if [[ "$backend" = "none" ]]; then
+    log "no tuned backend configured; CPU policy is driven directly via sysfs and SMU"
+    return
+  fi
 
   if ! unit_exists tuned.service; then
     warn "tuned.service is missing"
@@ -379,7 +452,7 @@ main() {
   esac
 
   ensure_masked_units
-  ensure_tuned
+  ensure_power_backend
   ensure_enabled_units
   check_static_files
   check_hardware_guard

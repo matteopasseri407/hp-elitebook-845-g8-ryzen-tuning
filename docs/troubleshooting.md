@@ -19,7 +19,7 @@ The script searches:
 
 On Fedora, the project COPR packages upstream FlyGoat RyzenAdj `v0.17.0`.
 On other distributions, install RyzenAdj from the distribution, upstream, or
-use the pinned source-build path from `scripts/install-fedora.sh`.
+use the pinned source-build path from `scripts/install.sh`.
 
 ## RyzenAdj Present But SMU Writes Fail
 

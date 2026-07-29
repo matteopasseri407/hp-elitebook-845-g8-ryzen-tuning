@@ -33,7 +33,7 @@ boost, and CPU frequency when RyzenAdj is unavailable or blocked by lockdown.
 The spec patches packaged unit files, helper scripts, sleep hook, and GNOME
 extension away from the source installer's `/usr/local/sbin` paths. This keeps
 the RPM-owned install inside normal distribution paths while leaving
-`scripts/install-fedora.sh` unchanged for manual installs.
+`scripts/install.sh` unchanged for manual installs.
 
 ## Manual COPR Flow
 

@@ -120,9 +120,9 @@ The idle watcher is intentionally cheap. It samples aggregate `/proc/stat` and `
 - Linux with systemd and udev
 - AMD P-State or cpufreq sysfs support
 - `ryzenadj` installed as `/usr/local/sbin/ryzenadj`, `/usr/local/bin/ryzenadj`, or `/usr/bin/ryzenadj` for full SMU power-limit control
-- `tuned` recommended on Fedora
+- `tuned` on Fedora, where the dispatcher hands it the balanced/powersave profile. Not required on Ubuntu or Debian, which have no tuned by default; there the dispatcher drives CPU policy directly through sysfs and SMU
 - `pkexec` only if using the GNOME Shell switcher
-- `flock` from util-linux, normally installed by default on Fedora
+- `flock` from util-linux, normally installed by default
 - Kernel lockdown set to `none` for full RyzenAdj SMU control through `/dev/mem`
 
 Secure Boot commonly enables kernel lockdown. When lockdown is active, RyzenAdj may not be able to write SMU limits through `/dev/mem`; the installer warns and asks for confirmation before continuing. EPP, CPU max frequency, and boost sysfs controls still degrade cleanly.
@@ -143,7 +143,7 @@ distributions can install RyzenAdj from their package source, upstream, or let
 the Fedora/source installer build the pinned release:
 
 ```bash
-sudo ./scripts/install-fedora.sh --build-ryzenadj
+sudo ./scripts/install.sh --build-ryzenadj
 ```
 
 The source-build path pins RyzenAdj `v0.17.0` at commit `67aa960e71bf4cdd140b47d42c0c62c4cded68d1` and verifies SHA256 `848ac9d86ff65d30f5e2c8600aac2613f0f10003b0d6f0e516a54761d7345d44` before compiling.
@@ -200,48 +200,55 @@ sudo systemctl start elitebook-power-guard.service
 sudo dnf install tuned python3 polkit
 git clone https://github.com/matteopasseri407/hp-elitebook-845-g8-ryzen-tuning.git
 cd hp-elitebook-845-g8-ryzen-tuning
-sudo ./scripts/install-fedora.sh
+sudo ./scripts/install.sh
 ```
 
-The installer checks for `python3`, `tuned-adm` and RyzenAdj, then
-prints an explicit `dnf install` hint if anything is missing. `pkexec`
+The installer detects the distribution, checks for `python3`, `flock`,
+RyzenAdj, and (on Fedora) `tuned-adm`, then prints an install hint using the
+right package manager and package names if anything is missing. `pkexec`
 is required only when installing the optional GNOME Shell indicator.
+
+To see what it detected without installing anything:
+
+```bash
+./scripts/install.sh --print-platform
+```
 
 To skip the Steam game watcher:
 
 ```bash
-sudo ./scripts/install-fedora.sh --without-steam-watcher
+sudo ./scripts/install.sh --without-steam-watcher
 ```
 
 To skip the idle overlay watcher:
 
 ```bash
-sudo ./scripts/install-fedora.sh --without-idle-watcher
+sudo ./scripts/install.sh --without-idle-watcher
 ```
 
 To skip the update guard timer:
 
 ```bash
-sudo ./scripts/install-fedora.sh --without-power-guard
+sudo ./scripts/install.sh --without-power-guard
 ```
 
 To install on a different laptop after reviewing the profile values:
 
 ```bash
-sudo ./scripts/install-fedora.sh --force
+sudo ./scripts/install.sh --force
 ```
 
 To build a pinned RyzenAdj from source when no `ryzenadj` binary is installed:
 
 ```bash
 sudo dnf install cmake gcc-c++ make pciutils-devel curl tar
-sudo ./scripts/install-fedora.sh --build-ryzenadj
+sudo ./scripts/install.sh --build-ryzenadj
 ```
 
 Optional btrfs swapfile hibernate preflight:
 
 ```bash
-sudo ./scripts/install-fedora.sh --with-hibernate-preflight
+sudo ./scripts/install.sh --with-hibernate-preflight
 ```
 
 See the Hibernate Preflight section below for the required one-time configuration.
@@ -249,7 +256,7 @@ See the Hibernate Preflight section below for the required one-time configuratio
 Optional GNOME Shell indicator:
 
 ```bash
-sudo ./scripts/install-fedora.sh --with-gnome-extension
+sudo ./scripts/install.sh --with-gnome-extension
 ```
 
 After installing the GNOME extension, enable it from the Extensions app or with:
@@ -261,6 +268,31 @@ gnome-extensions enable elitebook-thermal-profile@matteopasseri.github.io
 On Wayland, a logout/login may be needed after installing a local extension.
 
 The GNOME indicator intentionally exposes only `Auto`, `Game`, and `Quiet`. `performance`, `battery`, and `battery-saver` remain technical profiles available to automation or the CLI, not primary daily UI choices.
+
+## Install On Ubuntu Or Debian
+
+Experimental. The installer, update guard, and tests are distribution aware and
+the platform logic is exercised in CI on Ubuntu runners, but the profiles have
+not been validated on a physical Ubuntu machine yet. Fedora stays the primary
+validated path.
+
+```bash
+sudo apt install python3 util-linux cmake g++ make libpci-dev curl tar
+git clone https://github.com/matteopasseri407/hp-elitebook-845-g8-ryzen-tuning.git
+cd hp-elitebook-845-g8-ryzen-tuning
+sudo ./scripts/install.sh --build-ryzenadj
+```
+
+Two things differ from Fedora and are worth reading before you start:
+
+- **Secure Boot puts the kernel in lockdown**, which blocks the RyzenAdj SMU
+  writes this project is built around. Check with
+  `cat /sys/kernel/security/lockdown`; it should read `[none] ...`.
+- **There is no tuned**, so CPU policy is applied directly through sysfs and
+  SMU, and `power-profiles-daemon` is masked, which disables GNOME's power mode
+  selector.
+
+Full guide, including verification and uninstall: [docs/ubuntu.md](docs/ubuntu.md).
 
 ## Use
 
@@ -292,7 +324,7 @@ cat /run/elitebook-thermal-profile/guard
 
 `elitebook-power-guard.timer` runs after boot and then periodically. It is deliberately conservative: it does not versionlock Fedora packages, pin kernels, or block upgrades. Instead it repairs the invariants this project owns:
 
-- `tuned-ppd.service` and `power-profiles-daemon.service` stay masked so GNOME's stock Power Mode backend cannot take over EPP policy
+- `tuned-ppd.service` and `power-profiles-daemon.service` stay masked so GNOME's stock Power Mode backend cannot take over EPP policy; units that the distribution does not ship are skipped rather than masked
 - `elitebook-thermal-profile`, idle watcher, and Steam watcher stay enabled
 - udev power-supply rules are reloaded
 - hardware, RyzenAdj presence, and `amd-pstate-epp` sysfs shape are checked
@@ -338,7 +370,7 @@ inspect the default boot entry and `btrfs-progs` for the swapfile offset.
 ## Uninstall
 
 ```bash
-sudo ./scripts/install-fedora.sh --uninstall
+sudo ./scripts/install.sh --uninstall
 ```
 
 The compatibility wrapper still works:
@@ -350,16 +382,16 @@ sudo ./scripts/uninstall.sh
 To keep a RyzenAdj binary installed by `--build-ryzenadj`:
 
 ```bash
-sudo ./scripts/install-fedora.sh --uninstall --keep-ryzenadj
+sudo ./scripts/install.sh --uninstall --keep-ryzenadj
 ```
 
 To remove the optional GNOME extension as well:
 
 ```bash
-sudo ./scripts/install-fedora.sh --uninstall --gnome-extension
+sudo ./scripts/install.sh --uninstall --gnome-extension
 ```
 
-Uninstall stops and disables the `elitebook-*` units, removes installed binaries, removes the udev rule and sleep hook, unmasks Fedora's stock power profile services, and restores `tuned-adm profile balanced`.
+Uninstall stops and disables the `elitebook-*` units, removes installed binaries, removes the udev rule, sleep hook, and recorded backend, unmasks the stock power profile services, and hands CPU policy back to the distribution default: `tuned-adm profile balanced` on Fedora, or re-enabled `power-profiles-daemon` on Ubuntu and Debian.
 
 ## Related Work
 
@@ -418,4 +450,5 @@ Read [docs/safety.md](docs/safety.md) before adapting it to other machines.
 - Consider renaming the public repository to `cezanne-thermal-profile` or `hp-amd-thermal-tuner` before a broader release. The current repository name is accurate for the original test laptop but too narrow for the validated Cezanne hardware table above.
 - RPM spec cleanup for `/usr/libexec` and packaged systemd units
 - More test reports across BIOS versions
-- Optional AUR and `.deb` install paths after Fedora usage reports justify the maintenance cost
+- Validate the Ubuntu path on physical hardware, then drop the experimental label in [docs/ubuntu.md](docs/ubuntu.md)
+- Optional AUR and `.deb` packages after usage reports justify the maintenance cost; the source installer already supports Ubuntu and Debian
