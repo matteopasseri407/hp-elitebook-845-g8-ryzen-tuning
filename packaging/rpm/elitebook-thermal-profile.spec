@@ -1,5 +1,5 @@
 Name:           elitebook-thermal-profile
-Version:        0.3.1
+Version:        0.4.0
 Release:        1%{?dist}
 Summary:        Thermal and power profiles for HP AMD Cezanne laptops
 
@@ -176,6 +176,23 @@ fi
 %{_datadir}/gnome-shell/extensions/%{extension_uuid}/
 
 %changelog
+* Wed Jul 29 2026 Matteo Passeri <matteopasseri407@users.noreply.github.com> - 0.4.0-1
+- Make the source installer distribution aware: detect the distribution
+  family from os-release, map package names per family, and require tuned
+  only on Fedora, where it is the stock CPU policy backend
+- Rename the source installer to scripts/install.sh and keep
+  scripts/install-fedora.sh as a compatibility shim; the RPM is unaffected
+- Record the configured power backend in
+  /etc/elitebook-thermal-profile/backend.conf so the update guard can tell
+  a genuine tuned regression from a system that never had tuned
+- Skip masking power backend units the distribution does not ship instead
+  of creating dangling masks
+- Check for libpci headers before a RyzenAdj source build
+- Refuse --with-hibernate-preflight outside Fedora, where grubby and the
+  SELinux label it inspects do not exist
+- Add scripts/install.sh --print-platform for root-free diagnostics
+- Document the experimental Ubuntu and Debian path in docs/ubuntu.md
+
 * Thu Jun 11 2026 Matteo Passeri <matteopasseri407@users.noreply.github.com> - 0.3.1-1
 - Document that STT-enabled platforms (845 G8 included) pin the STAPM
   limit to the fast limit, with measurements and troubleshooting entry;
