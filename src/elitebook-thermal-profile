@@ -4,10 +4,11 @@ set -euo pipefail
 
 # Keep in step with packaging/rpm/elitebook-thermal-profile.spec and
 # packaging/debian/changelog; tests/test-version-consistency.sh enforces it.
-ELITEBOOK_VERSION="0.6.0"
+ELITEBOOK_VERSION="0.7.0"
 
 STATE_DIR="${ELITEBOOK_THERMAL_STATE_DIR:-/run/elitebook-thermal-profile}"
 STATE_FILE="$STATE_DIR/current"
+THERMAL_FILE="$STATE_DIR/thermal"
 LOCK_FILE="$STATE_DIR/dispatcher.lock"
 POWER_SUPPLY_DIR="${ELITEBOOK_POWER_SUPPLY_DIR:-/sys/class/power_supply}"
 DMI_ID_DIR="${ELITEBOOK_DMI_ID_DIR:-/sys/class/dmi/id}"
@@ -171,6 +172,42 @@ cpu_temperature_c() {
   return 1
 }
 
+thermal_value() {
+  local key="$1"
+  awk -F= -v key="$key" '$1 == key {print $2; exit}' "$THERMAL_FILE" 2>/dev/null || true
+}
+
+# The idle watcher records the package temperature while a profile is active.
+# Without it there is no way to tell a profile that is holding from one that
+# is being overrun, so surface it when the record exists.
+print_thermal_record() {
+  local peak target samples over percent
+
+  [[ -r "$THERMAL_FILE" ]] || return 0
+
+  peak="$(thermal_value peak_c)"
+  target="$(thermal_value target_c)"
+  samples="$(thermal_value samples)"
+  over="$(thermal_value over_target)"
+
+  is_uint "$peak" && [[ "$peak" -gt 0 ]] || return 0
+
+  if is_uint "$target" && [[ "$target" -gt 0 ]]; then
+    printf 'Peak:         %s C since this profile was applied (target %s C)\n' "$peak" "$target"
+  else
+    printf 'Peak:         %s C since this profile was applied\n' "$peak"
+  fi
+
+  if is_uint "$samples" && is_uint "$over" && [[ "$samples" -gt 0 ]]; then
+    percent=$((over * 100 / samples))
+    if [[ "$over" -eq 0 ]]; then
+      printf 'Above target: never, over %s samples\n' "$samples"
+    else
+      printf 'Above target: %s%% of %s samples\n' "$percent" "$samples"
+    fi
+  fi
+}
+
 # Human-readable view of what the dispatcher last did. Deliberately runs
 # without root: it only reads the state file and sysfs, and it is the first
 # thing to reach for when the laptop is not behaving as expected.
@@ -263,6 +300,8 @@ print_status() {
 
   temp="$(cpu_temperature_c || true)"
   [[ -n "$temp" ]] && printf 'CPU temp:     %s C\n' "$temp"
+
+  print_thermal_record
 
   printf 'Updated:      %s\n' "${updated:-unknown}"
 

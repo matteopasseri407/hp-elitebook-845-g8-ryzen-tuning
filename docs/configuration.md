@@ -93,6 +93,54 @@ If the SMU line says anything other than `applied`, the power limits shown are
 what was requested rather than what the hardware is enforcing. See
 [troubleshooting.md](troubleshooting.md).
 
+## Is the profile actually holding?
+
+The profiles are open loop: they set limits and never look at the result. A
+chassis that cannot dissipate the configured envelope, a hot room, and thermal
+paste that has dried out all look identical to a healthy machine from the
+inside.
+
+While the idle overlay watcher is running it records the package temperature
+against the active profile's target, and `status` reports it:
+
+```
+Peak:         94 C since this profile was applied (target 90 C)
+Above target: 25% of 3600 samples
+```
+
+Brief excursions above the target are normal — the firmware allows short
+bursts on purpose. A large share of the time above it is the signal that the
+sustained envelope is too high for this machine. `elitebook-power-guard check`
+says so explicitly once a quarter of the samples are above target, over at
+least five minutes of data:
+
+```
+elitebook-power-guard: WARN: the active profile is not holding its thermal
+target: 38% of 3600 samples above 90 C, peak 97 C. Consider lowering the
+sustained limit in the profile configuration.
+```
+
+The fix is to lower `SLOW_MW` and `APU_MW` for that profile in
+`profiles.conf`, then watch the same numbers again.
+
+**Nothing adjusts itself.** The firmware already runs a thermal control loop
+of its own, and a second one fighting it produces oscillation rather than a
+cooler laptop — the same reason the STAPM limit is left to the firmware. This
+measures and reports; the decision stays yours.
+
+The record lives at `/run/elitebook-thermal-profile/thermal` and resets every
+time a profile is applied, so a peak from this morning is never blamed on the
+profile you are running now. It requires the idle watcher: installing with
+`--without-idle-watcher` leaves `status` showing only the current temperature.
+
+Thresholds, if the defaults do not suit your machine:
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `ELITEBOOK_THERMAL_MIN_SAMPLES` | `300` | Samples needed before the guard judges |
+| `ELITEBOOK_THERMAL_OVER_TARGET_PERCENT` | `25` | Share above target that triggers the warning |
+| `ELITEBOOK_THERMAL_WRITE_SAMPLES` | `60` | Samples between routine record writes |
+
 ## Environment overrides
 
 A few settings are read from the environment instead, because they belong to

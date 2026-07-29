@@ -61,6 +61,8 @@ jobs:
         run: tests/test-profile-config.sh
       - name: Run version consistency tests
         run: tests/test-version-consistency.sh
+      - name: Run thermal report tests
+        run: tests/test-thermal-report.sh
 
   ruff:
     name: Ruff (Python watchers)

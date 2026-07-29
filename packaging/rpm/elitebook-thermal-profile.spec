@@ -1,5 +1,5 @@
 Name:           elitebook-thermal-profile
-Version:        0.6.0
+Version:        0.7.0
 Release:        1%{?dist}
 Summary:        Thermal and power profiles for HP AMD Cezanne laptops
 
@@ -184,6 +184,13 @@ fi
 %{_datadir}/gnome-shell/extensions/%{extension_uuid}/
 
 %changelog
+* Wed Jul 29 2026 Matteo Passeri <matteopasseri407@users.noreply.github.com> - 0.7.0-1
+- Record the package temperature against the active profile's thermal target
+  while the idle watcher runs, reset on every profile change
+- Report the peak and the share of time above target in status, and warn from
+  elitebook-power-guard check when a profile is not holding its target
+- Nothing is adjusted automatically: the firmware owns the control loop
+
 * Wed Jul 29 2026 Matteo Passeri <matteopasseri407@users.noreply.github.com> - 0.5.0-1
 - Apply the CPU-level part of a profile (EPP, boost, frequency cap) even when
   RyzenAdj is missing or blocked by kernel lockdown, rather than refusing to

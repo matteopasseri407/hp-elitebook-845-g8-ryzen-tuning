@@ -435,6 +435,23 @@ elitebook-thermal-profile status
 Values outside a safe range are refused with a message and the built-in
 default is kept. Full reference: [docs/configuration.md](docs/configuration.md).
 
+### Knowing whether it worked
+
+The profiles set limits without checking the result, so `status` also reports
+what the temperature actually did while the profile was active:
+
+```
+Peak:         94 C since this profile was applied (target 90 C)
+Above target: 25% of 3600 samples
+```
+
+Brief excursions are normal. A large share of time above target means the
+sustained envelope is too high for this machine, and `elitebook-power-guard
+check` says so once a quarter of the samples are above target. Nothing adjusts
+itself: the firmware runs its own thermal control loop, and a second one
+fighting it produces oscillation rather than a cooler laptop. The record needs
+the idle watcher running.
+
 ## Update Guard
 
 `elitebook-power-guard.timer` runs after boot and then periodically. It is deliberately conservative: it does not versionlock Fedora packages, pin kernels, or block upgrades. Instead it repairs the invariants this project owns:
