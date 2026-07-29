@@ -7,6 +7,7 @@ REPO_DIR="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 SELF="$(basename -- "$0")"
 
 OS_RELEASE="${ELITEBOOK_OS_RELEASE:-/etc/os-release}"
+PACKAGED_BIN="${ELITEBOOK_PACKAGED_BIN:-/usr/bin/elitebook-thermal-profile}"
 BACKEND_CONF_DIR="${ELITEBOOK_BACKEND_CONF_DIR:-/etc/elitebook-thermal-profile}"
 BACKEND_CONF="$BACKEND_CONF_DIR/backend.conf"
 
@@ -148,6 +149,60 @@ pkg_name() {
   esac
 }
 
+# Which package, if any, owns a path. Empty when nothing does, or when the
+# distribution's query tool is unavailable.
+# Both tools report "no package owns this" through their exit status. Trust
+# that rather than their message, which is translated: on an Italian system
+# rpm answers "non e' posseduto da alcun pacchetto", and matching English text
+# would quietly turn that error into a package name.
+package_owning() {
+  local path="$1" owner="" raw=""
+
+  if command -v dpkg-query >/dev/null 2>&1; then
+    if raw="$(LC_ALL=C dpkg-query -S "$path" 2>/dev/null)"; then
+      owner="$(printf '%s' "$raw" | head -n 1 | cut -d: -f1)"
+    fi
+  fi
+  if [[ -z "$owner" ]] && command -v rpm >/dev/null 2>&1; then
+    if raw="$(LC_ALL=C rpm -qf "$path" 2>/dev/null)"; then
+      owner="$(printf '%s' "$raw" | head -n 1)"
+    fi
+  fi
+
+  printf '%s' "$owner"
+}
+
+# The RPM and the .deb install into /usr/bin; this installer writes to
+# /usr/local/sbin and drops its units in /etc/systemd/system, which take
+# precedence over the packaged ones in /usr/lib/systemd/system. Running both
+# therefore leaves two copies of everything, with the packaged one still
+# registered but no longer the copy that runs: a later package upgrade would
+# appear to do nothing. Refuse instead of creating that state silently.
+check_no_packaged_install() {
+  local owner
+
+  [[ -e "$PACKAGED_BIN" ]] || return 0
+
+  owner="$(package_owning "$PACKAGED_BIN")"
+  cat >&2 <<EOF
+$SELF: a packaged installation is already present.
+
+  $PACKAGED_BIN${owner:+ (owned by $owner)}
+
+Installing from source on top of it leaves two copies: the units this installer
+writes to /etc/systemd/system override the packaged ones, so the package would
+stay registered while a different copy actually runs.
+
+Remove the package first, then run this installer again:
+  sudo apt purge elitebook-thermal-profile     # Debian, Ubuntu
+  sudo dnf remove elitebook-thermal-profile    # Fedora
+
+Or keep the package and skip this installer entirely; both install the same
+software.
+EOF
+  exit 1
+}
+
 # The hibernate preflight verifies a btrfs swapfile against Fedora-style boot
 # entries via grubby, and checks an SELinux label. Neither exists on Debian or
 # Ubuntu, so refuse it there instead of installing something that cannot work.
@@ -218,7 +273,10 @@ done
 if [[ "$MODE" != "uninstall" ]]; then
   [[ "$KEEP_RYZENADJ" -eq 0 ]] || die "--keep-ryzenadj is only valid with --uninstall"
   [[ "$REMOVE_GNOME_EXTENSION" -eq 0 ]] || die "--gnome-extension is only valid with --uninstall"
-  [[ "$MODE" != "install" ]] || check_hibernate_preflight_supported
+  if [[ "$MODE" = "install" ]]; then
+    check_hibernate_preflight_supported
+    check_no_packaged_install
+  fi
 fi
 
 # Reports what the installer detected. Kept root-free on purpose: it is the
