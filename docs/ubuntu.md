@@ -14,7 +14,7 @@ with the output of `sudo elitebook-power-guard check`.
 
 | Area | Fedora | Ubuntu / Debian |
 | --- | --- | --- |
-| Packaging | COPR RPM | source installer only |
+| Packaging | COPR RPM | `.deb` on the release page, or the source installer |
 | CPU policy backend | `tuned` plus direct sysfs and SMU | direct sysfs and SMU only |
 | Masked backends | `tuned-ppd`, `power-profiles-daemon` | `power-profiles-daemon` |
 | RyzenAdj | COPR package or source build | source build (`--build-ryzenadj`) |
@@ -55,24 +55,51 @@ sysfs. What you lose is the SMU layer, which is where the sustained power
 limits and the thermal target live, so the main reason to use this project is
 gone. To get it back, disable Secure Boot in the BIOS.
 
-## Install
+## Install from the .deb packages
 
-Base dependencies:
+Download both packages from the
+[latest release](https://github.com/matteopasseri407/hp-elitebook-845-g8-ryzen-tuning/releases/latest):
+
+- `elitebook-thermal-profile_*_all.deb`
+- `ryzenadj_*~ubuntuXX.YY_amd64.deb` — pick the one matching your Ubuntu
+  release. RyzenAdj is compiled, so the binary is tied to the release it was
+  built on. Debian users should build it from source instead, or use the
+  source installer's `--build-ryzenadj`.
+
+```bash
+sudo apt install ./ryzenadj_*.deb ./elitebook-thermal-profile_*.deb
+```
+
+Installing deliberately does not start anything. After checking that your
+machine is on the supported hardware list:
+
+```bash
+sudo systemctl enable --now elitebook-thermal-profile.service
+sudo systemctl enable --now elitebook-idle-watcher.service
+sudo systemctl enable --now elitebook-steam-game-watcher.service
+sudo systemctl enable --now elitebook-power-guard.timer
+sudo systemctl start elitebook-power-guard.service
+```
+
+Optional GNOME Shell indicator:
+
+```bash
+sudo apt install ./gnome-shell-extension-elitebook-thermal-profile_*.deb
+gnome-extensions enable elitebook-thermal-profile@matteopasseri.github.io
+```
+
+On Wayland, log out and back in after installing the extension.
+
+There is no APT repository or PPA, so these packages will not update
+themselves. Watch the releases page, or use the source installer below.
+
+## Install from source
+
+Base dependencies, plus the toolchain to build RyzenAdj:
 
 ```bash
 sudo apt install python3 util-linux
-```
-
-RyzenAdj is not packaged in the Ubuntu or Debian archives. The installer can
-build a pinned, SHA256-verified upstream release:
-
-```bash
 sudo apt install cmake g++ make libpci-dev curl tar
-```
-
-Then:
-
-```bash
 git clone https://github.com/matteopasseri407/hp-elitebook-845-g8-ryzen-tuning.git
 cd hp-elitebook-845-g8-ryzen-tuning
 sudo ./scripts/install.sh --build-ryzenadj
@@ -87,7 +114,10 @@ sudo ./scripts/install.sh --build-ryzenadj --with-gnome-extension
 gnome-extensions enable elitebook-thermal-profile@matteopasseri.github.io
 ```
 
-On Wayland, log out and back in after installing the extension.
+The source installer writes `/etc/elitebook-thermal-profile/backend.conf`; the
+packages do not, because they cannot know which distribution they will land on.
+Without that file the update guard falls back to reading `os-release`, which
+reaches the same conclusion on Ubuntu and Debian.
 
 To see what the installer detected before running it, without root:
 
@@ -130,21 +160,36 @@ skipped with a warning and only boost, frequency caps, and SMU limits apply.
 
 ## Not available here
 
-- **`.deb` package.** Source installation only. Fedora has a COPR repository;
-  there is no equivalent published for Ubuntu or Debian yet.
+- **APT repository or PPA.** The `.deb` packages are attached to GitHub
+  releases, so `apt` will not upgrade them for you. Fedora has a COPR
+  repository; there is no equivalent for Ubuntu or Debian, and publishing one
+  needs a Launchpad account and a signing key.
 - **Hibernate preflight.** It inspects Fedora-style boot entries with `grubby`
   and checks an SELinux label, neither of which exists on Ubuntu or Debian.
   `--with-hibernate-preflight` is refused there rather than installed broken.
 
 ## Uninstall
 
+If you installed the packages:
+
+```bash
+sudo apt purge elitebook-thermal-profile
+sudo systemctl unmask power-profiles-daemon.service
+sudo systemctl enable --now power-profiles-daemon.service
+```
+
+The package removes its own files, but unmasking `power-profiles-daemon` is
+manual: the update guard masked it at runtime, so it is not something package
+removal can be expected to know about.
+
+If you installed from source:
+
 ```bash
 sudo ./scripts/install.sh --uninstall
 ```
 
-This removes the units, binaries, udev rule, sleep hook, and
+That removes the units, binaries, udev rule, sleep hook, and
 `/etc/elitebook-thermal-profile/backend.conf`, unmasks
 `power-profiles-daemon.service`, and enables it again so the system returns to
-stock Ubuntu power management.
-
-To keep a RyzenAdj binary built by `--build-ryzenadj`, add `--keep-ryzenadj`.
+stock Ubuntu power management. To keep a RyzenAdj binary built by
+`--build-ryzenadj`, add `--keep-ryzenadj`.

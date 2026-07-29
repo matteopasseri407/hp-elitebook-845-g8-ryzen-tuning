@@ -1,0 +1,44 @@
+Source: elitebook-thermal-profile
+Section: admin
+Priority: optional
+Maintainer: Matteo Passeri <matteopasseri407@users.noreply.github.com>
+Build-Depends: debhelper-compat (= 13)
+Standards-Version: 4.7.0
+Homepage: https://github.com/matteopasseri407/hp-elitebook-845-g8-ryzen-tuning
+Rules-Requires-Root: no
+
+Package: elitebook-thermal-profile
+Architecture: all
+Depends: ${misc:Depends},
+         python3,
+         systemd,
+         udev
+Recommends: ryzenadj (>= 0.17.0)
+Suggests: gnome-shell-extension-elitebook-thermal-profile
+Description: thermal and power profiles for HP AMD Cezanne laptops
+ User-space thermal and power profile integration for selected HP EliteBook and
+ ProBook AMD Cezanne laptops. It combines AMD P-State EPP, CPU frequency policy,
+ systemd units, udev rules, and RyzenAdj-driven SMU limits into a profile
+ dispatcher with idle, AC/battery, update guard, and Steam game automation.
+ .
+ Full SMU control requires a RyzenAdj binary, which Debian and Ubuntu do not
+ package. Without it the profiles degrade to kernel EPP, boost, and frequency
+ controls where the driver exposes them.
+ .
+ Installing this package deliberately does not start hardware tuning. Enable the
+ units explicitly after checking that your machine is on the supported hardware
+ list.
+
+Package: gnome-shell-extension-elitebook-thermal-profile
+Architecture: all
+Depends: ${misc:Depends},
+         elitebook-thermal-profile (= ${binary:Version}),
+         gnome-shell (>= 45),
+         pkexec
+Description: GNOME Shell indicator for EliteBook thermal profiles
+ GNOME Shell panel indicator for switching the EliteBook thermal profile between
+ Auto, Game, and Quiet without exposing lower-level technical profiles in the
+ daily user interface.
+ .
+ The extension must be enabled once after installation with
+ gnome-extensions enable elitebook-thermal-profile@matteopasseri.github.io

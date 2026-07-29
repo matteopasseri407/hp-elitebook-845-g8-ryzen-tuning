@@ -1,0 +1,27 @@
+Source: ryzenadj
+Section: admin
+Priority: optional
+Maintainer: Matteo Passeri <matteopasseri407@users.noreply.github.com>
+Build-Depends: debhelper-compat (= 13),
+               cmake,
+               g++,
+               libpci-dev,
+               make
+Standards-Version: 4.7.0
+Homepage: https://github.com/FlyGoat/RyzenAdj
+Rules-Requires-Root: no
+
+Package: ryzenadj
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: adjust power management settings for AMD Ryzen APUs
+ RyzenAdj is a userspace command-line tool for adjusting AMD Ryzen mobile APU
+ SMU power management settings. It can set limits such as sustained package
+ power and thermal targets on supported Ryzen laptop platforms.
+ .
+ This package builds the upstream FlyGoat RyzenAdj release used by the HP AMD
+ thermal profile tooling, from a pinned and SHA256-verified source tarball.
+ Debian and Ubuntu do not package RyzenAdj themselves.
+ .
+ Kernel lockdown, which Secure Boot normally enables, blocks the low-level SMU
+ access this tool needs at runtime.

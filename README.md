@@ -276,6 +276,21 @@ the platform logic is exercised in CI on Ubuntu runners, but the profiles have
 not been validated on a physical Ubuntu machine yet. Fedora stays the primary
 validated path.
 
+Download `elitebook-thermal-profile_*_all.deb` and the `ryzenadj_*.deb` matching
+your Ubuntu release from the
+[latest release](https://github.com/matteopasseri407/hp-elitebook-845-g8-ryzen-tuning/releases/latest),
+then:
+
+```bash
+sudo apt install ./ryzenadj_*.deb ./elitebook-thermal-profile_*.deb
+```
+
+Like the RPM, the packages install files without starting hardware tuning;
+enable the units explicitly afterwards. RyzenAdj is shipped because neither
+Debian nor Ubuntu package it, and without it the SMU layer is unavailable.
+
+To install from source instead:
+
 ```bash
 sudo apt install python3 util-linux cmake g++ make libpci-dev curl tar
 git clone https://github.com/matteopasseri407/hp-elitebook-845-g8-ryzen-tuning.git

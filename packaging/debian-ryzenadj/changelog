@@ -1,0 +1,7 @@
+ryzenadj (0.17.0-1) unstable; urgency=medium
+
+  * Initial Debian and Ubuntu packaging of the upstream FlyGoat RyzenAdj
+    release, matching the RyzenAdj package already published for Fedora.
+  * Built from a pinned, SHA256-verified upstream source tarball.
+
+ -- Matteo Passeri <matteopasseri407@users.noreply.github.com>  Wed, 29 Jul 2026 15:24:46 +0200

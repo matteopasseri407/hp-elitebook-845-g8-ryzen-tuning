@@ -1,0 +1,67 @@
+#!/usr/bin/make -f
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Mirrors packaging/rpm/elitebook-thermal-profile.spec: the same files, moved
+# from the source installer's /usr/local/sbin layout into distribution paths,
+# with the same rule that installing must never start hardware tuning.
+
+export DH_VERBOSE = 1
+
+EXTENSION_UUID = elitebook-thermal-profile@matteopasseri.github.io
+PKG = debian/elitebook-thermal-profile
+GNOME_PKG = debian/gnome-shell-extension-elitebook-thermal-profile
+
+BINDIR = /usr/bin
+UNITDIR = /usr/lib/systemd/system
+UDEVDIR = /usr/lib/udev/rules.d
+SLEEPDIR = /usr/lib/systemd/system-sleep
+EXTDIR = /usr/share/gnome-shell/extensions
+
+%:
+	dh $@
+
+# Nothing to compile: shell scripts, Python watchers, and GNOME Shell files.
+override_dh_auto_build:
+
+override_dh_auto_test:
+	bash -n src/elitebook-thermal-profile src/elitebook-power-guard \
+		system-sleep/elitebook-thermal-profile
+	python3 -m py_compile src/elitebook-idle-watcher src/elitebook-steam-game-watcher
+
+override_dh_auto_install:
+	# The hibernate preflight is intentionally absent: it inspects Fedora-style
+	# boot entries with grubby and checks an SELinux label.
+	install -D -m 0755 src/elitebook-thermal-profile $(PKG)$(BINDIR)/elitebook-thermal-profile
+	install -D -m 0755 src/elitebook-idle-watcher $(PKG)$(BINDIR)/elitebook-idle-watcher
+	install -D -m 0755 src/elitebook-power-guard $(PKG)$(BINDIR)/elitebook-power-guard
+	install -D -m 0755 src/elitebook-steam-game-watcher $(PKG)$(BINDIR)/elitebook-steam-game-watcher
+
+	install -D -m 0644 systemd/elitebook-thermal-profile.service $(PKG)$(UNITDIR)/elitebook-thermal-profile.service
+	install -D -m 0644 systemd/elitebook-idle-watcher.service $(PKG)$(UNITDIR)/elitebook-idle-watcher.service
+	install -D -m 0644 systemd/elitebook-steam-game-watcher.service $(PKG)$(UNITDIR)/elitebook-steam-game-watcher.service
+	install -D -m 0644 systemd/elitebook-power-guard.service $(PKG)$(UNITDIR)/elitebook-power-guard.service
+	install -D -m 0644 systemd/elitebook-power-guard.timer $(PKG)$(UNITDIR)/elitebook-power-guard.timer
+
+	install -D -m 0644 udev/90-elitebook-thermal-profile.rules $(PKG)$(UDEVDIR)/90-elitebook-thermal-profile.rules
+	install -D -m 0755 system-sleep/elitebook-thermal-profile $(PKG)$(SLEEPDIR)/elitebook-thermal-profile
+
+	install -d $(GNOME_PKG)$(EXTDIR)
+	cp -a gnome-extension/$(EXTENSION_UUID) $(GNOME_PKG)$(EXTDIR)/
+
+	# Rewrite the source-installer paths baked into units and helper scripts.
+	sed -i -e 's#/usr/local/sbin#$(BINDIR)#g' \
+		$(PKG)$(UNITDIR)/elitebook-*.service \
+		$(PKG)$(SLEEPDIR)/elitebook-thermal-profile
+	sed -i -e 's#/usr/local/sbin#$(BINDIR)#g' \
+		-e 's#/etc/udev/rules.d/90-elitebook-thermal-profile.rules#$(UDEVDIR)/90-elitebook-thermal-profile.rules#g' \
+		-e 's#/etc/systemd/system-sleep/elitebook-thermal-profile#$(SLEEPDIR)/elitebook-thermal-profile#g' \
+		$(PKG)$(BINDIR)/elitebook-power-guard \
+		$(PKG)$(BINDIR)/elitebook-steam-game-watcher
+	sed -i -e 's#/usr/local/sbin/elitebook-thermal-profile#$(BINDIR)/elitebook-thermal-profile#g' \
+		$(GNOME_PKG)$(EXTDIR)/$(EXTENSION_UUID)/extension.js
+
+# Units ship disabled and stopped. Tuning hardware is an explicit decision the
+# user makes after checking the supported hardware table, never a side effect
+# of installing a package.
+override_dh_installsystemd:
+	dh_installsystemd --no-enable --no-start
