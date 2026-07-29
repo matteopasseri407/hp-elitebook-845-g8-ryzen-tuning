@@ -151,9 +151,23 @@ The source-build path pins RyzenAdj `v0.17.0` at commit `67aa960e71bf4cdd140b47d
 When RyzenAdj works, profiles apply both kernel-level policy and SMU limits:
 EPP, boost, CPU max frequency, sustained package power, STAPM/fast/slow limits,
 and thermal targets. When RyzenAdj is missing or blocked by kernel lockdown,
-the runtime fallback still applies the kernel-level controls: EPP, boost, and
-CPU max frequency. That fallback is intentionally conservative; it is not a
-full replacement for SMU tuning.
+the dispatcher still applies the kernel-level controls for the selected
+profile — EPP, boost, and CPU max frequency — records the reason in its state
+file, and exits successfully. That fallback is intentionally conservative; it
+is not a full replacement for SMU tuning.
+
+The state file reports which of the two happened:
+
+```bash
+grep smu= /run/elitebook-thermal-profile/current
+```
+
+`smu=ok` means the limits were applied. `unavailable` means RyzenAdj is not
+installed, `blocked` means kernel lockdown refused the write (Secure Boot is
+the usual cause), and `failed` means RyzenAdj ran and returned an error. In
+the last three cases the `stapm_mw`, `fast_mw`, `slow_mw`, `apu_mw`, and
+`tctl_c` values in that file are what was requested, not what the hardware is
+running, and `elitebook-power-guard check` reports the machine as degraded.
 
 One SMU value is special: on platforms with Skin Temperature Tracking (STT)
 enabled (the EliteBook 845 G8 itself included), the firmware owns the STAPM

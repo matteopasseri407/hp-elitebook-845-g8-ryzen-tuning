@@ -8,6 +8,11 @@ LOCK_FILE="$STATE_DIR/dispatcher.lock"
 POWER_SUPPLY_DIR="${ELITEBOOK_POWER_SUPPLY_DIR:-/sys/class/power_supply}"
 DMI_ID_DIR="${ELITEBOOK_DMI_ID_DIR:-/sys/class/dmi/id}"
 CPUINFO_PATH="${ELITEBOOK_CPUINFO_PATH:-/proc/cpuinfo}"
+CPUFREQ_DIR="${ELITEBOOK_CPUFREQ_DIR:-/sys/devices/system/cpu/cpufreq}"
+LOCKDOWN_PATH="${ELITEBOOK_LOCKDOWN_PATH:-/sys/kernel/security/lockdown}"
+
+DETECTED_PRODUCT=""
+DETECTED_CPU=""
 
 usage() {
   cat >&2 <<'EOF'
@@ -127,7 +132,12 @@ find_ryzenadj() {
     return 0
   fi
 
-  for candidate in /usr/local/sbin/ryzenadj /usr/local/bin/ryzenadj /usr/bin/ryzenadj; do
+  # Overridable so the degraded path can be exercised on a machine that does
+  # have RyzenAdj installed.
+  # shellcheck disable=SC2206
+  local search=(${ELITEBOOK_RYZENADJ_SEARCH_PATHS:-/usr/local/sbin/ryzenadj /usr/local/bin/ryzenadj /usr/bin/ryzenadj})
+
+  for candidate in "${search[@]}"; do
     if [[ -x "$candidate" ]]; then
       echo "$candidate"
       return 0
@@ -139,7 +149,29 @@ find_ryzenadj() {
     return 0
   fi
 
-  die "RyzenAdj not found. Install ryzenadj or set RYZENADJ=/path/to/ryzenadj."
+  # Not finding RyzenAdj is not fatal. The SMU limits are the reason this
+  # project exists, but EPP, boost, and the frequency cap are applied through
+  # sysfs and work on their own, so apply what is available and say what is
+  # missing instead of refusing to run at all.
+  return 1
+}
+
+# Reports the active kernel lockdown mode: none, integrity, confidentiality,
+# or unavailable when the kernel does not expose it. Secure Boot normally
+# turns lockdown on, and lockdown is what blocks RyzenAdj's /dev/mem access.
+kernel_lockdown_mode() {
+  local content
+
+  [[ -r "$LOCKDOWN_PATH" ]] || { echo unavailable; return; }
+
+  content="$(tr -d '\0\n' <"$LOCKDOWN_PATH")"
+  if [[ "$content" == *"[none]"* ]]; then
+    echo none
+  elif [[ "$content" =~ \[([^]]+)\] ]]; then
+    echo "${BASH_REMATCH[1]}"
+  else
+    echo "${content:-unknown}"
+  fi
 }
 
 assert_supported_hardware() {
@@ -147,8 +179,14 @@ assert_supported_hardware() {
 
   local vendor product cpu
   vendor="$(read_trimmed "$DMI_ID_DIR/sys_vendor")"
+  # Recorded for the --check-hardware message, which used to name the
+  # development machine no matter what it was actually running on.
+  DETECTED_PRODUCT=""
+  DETECTED_CPU=""
   product="$(read_trimmed "$DMI_ID_DIR/product_name")"
   cpu="$(awk -F: '/model name/ {sub(/^[ \t]+/, "", $2); print $2; exit}' "$CPUINFO_PATH" 2>/dev/null || true)"
+  DETECTED_PRODUCT="$product"
+  DETECTED_CPU="$cpu"
 
   [[ "$vendor" == "HP" || "$vendor" == "Hewlett-Packard" ]] ||
     die "unsupported vendor '$vendor' (set ELITEBOOK_THERMAL_FORCE=1 to override)"
@@ -189,8 +227,15 @@ write_state() {
 
   "${SUDO[@]}" install -d -m 0755 "$STATE_DIR"
   tmp="$STATE_FILE.tmp.$$"
-  printf 'profile=%s\nsource=%s\nepp=%s\nstapm_mw=%s\nfast_mw=%s\nslow_mw=%s\napu_mw=%s\ntctl_c=%s\nboost=%s\nmax_freq=%s\nbattery_percent=%s\nlow_battery_threshold_percent=%s\nupdated=%s\n' \
-    "$profile" "$profile_source" "$epp" "$stapm" "$fast" "$slow" "$apu" "$tctl" "$boost" "$max_freq" "$battery_percent" "${ELITEBOOK_LOW_BATTERY_THRESHOLD:-20}" "$(date --iso-8601=seconds)" |
+  # smu records whether the RyzenAdj limits below actually took effect:
+  #   ok          applied
+  #   unavailable RyzenAdj is not installed
+  #   blocked     kernel lockdown refused the write (usually Secure Boot)
+  #   failed      RyzenAdj ran and returned an error
+  # When it is not ok, the stapm/fast/slow/apu/tctl values are what was
+  # requested, not what the hardware is running.
+  printf 'profile=%s\nsource=%s\nepp=%s\nsmu=%s\nstapm_mw=%s\nfast_mw=%s\nslow_mw=%s\napu_mw=%s\ntctl_c=%s\nboost=%s\nmax_freq=%s\nbattery_percent=%s\nlow_battery_threshold_percent=%s\nupdated=%s\n' \
+    "$profile" "$profile_source" "$epp" "${smu_status:-unknown}" "$stapm" "$fast" "$slow" "$apu" "$tctl" "$boost" "$max_freq" "$battery_percent" "${ELITEBOOK_LOW_BATTERY_THRESHOLD:-20}" "$(date --iso-8601=seconds)" |
     "${SUDO[@]}" tee "$tmp" >/dev/null
   "${SUDO[@]}" chmod 0644 "$tmp"
   "${SUDO[@]}" mv -f "$tmp" "$STATE_FILE"
@@ -206,7 +251,11 @@ fi
 assert_supported_hardware
 
 if [[ "$requested_profile" = "--check-hardware" ]]; then
-  echo "Supported HP EliteBook 845 G8 / Ryzen 7 PRO 5850U hardware detected."
+  if truthy "${ELITEBOOK_THERMAL_FORCE:-}"; then
+    echo "Hardware guard skipped: ELITEBOOK_THERMAL_FORCE is set."
+  else
+    echo "Supported hardware detected: ${DETECTED_PRODUCT:-unknown product} / ${DETECTED_CPU:-unknown CPU}."
+  fi
   exit 0
 fi
 
@@ -221,6 +270,9 @@ if [[ "${EUID}" -ne 0 ]]; then
     ELITEBOOK_POWER_SUPPLY_DIR="${ELITEBOOK_POWER_SUPPLY_DIR:-}" \
     ELITEBOOK_DMI_ID_DIR="${ELITEBOOK_DMI_ID_DIR:-}" \
     ELITEBOOK_CPUINFO_PATH="${ELITEBOOK_CPUINFO_PATH:-}" \
+    ELITEBOOK_CPUFREQ_DIR="${ELITEBOOK_CPUFREQ_DIR:-}" \
+    ELITEBOOK_LOCKDOWN_PATH="${ELITEBOOK_LOCKDOWN_PATH:-}" \
+    ELITEBOOK_RYZENADJ_SEARCH_PATHS="${ELITEBOOK_RYZENADJ_SEARCH_PATHS:-}" \
     "$0" "$@"
 fi
 
@@ -232,7 +284,13 @@ acquire_dispatcher_lock() {
   flock -w 10 -x 9 || die "could not acquire dispatcher lock within 10s"
 }
 
-RYZENADJ_BIN="$(find_ryzenadj)"
+# An explicitly configured RYZENADJ that cannot be executed is a configuration
+# error and stays fatal. Not having RyzenAdj at all is not: the dispatcher
+# degrades to the sysfs controls below and records that it did.
+if [[ -n "${RYZENADJ:-}" && ! -x "${RYZENADJ}" ]]; then
+  die "RYZENADJ is set but is not executable: $RYZENADJ"
+fi
+RYZENADJ_BIN="$(find_ryzenadj || true)"
 acquire_dispatcher_lock
 
 profile_source="${ELITEBOOK_PROFILE_SOURCE:-}"
@@ -362,15 +420,16 @@ fi
 # always exits 0.
 # shellcheck disable=SC2016
 "${SUDO[@]}" sh -c '
-boost_value="$1"
-max_freq="$2"
+cpufreq_dir="$1"
+boost_value="$2"
+max_freq="$3"
 
-if [ -w /sys/devices/system/cpu/cpufreq/boost ]; then
-  echo "$boost_value" > /sys/devices/system/cpu/cpufreq/boost 2>/dev/null ||
+if [ -w "$cpufreq_dir/boost" ]; then
+  echo "$boost_value" > "$cpufreq_dir/boost" 2>/dev/null ||
     echo "elitebook-thermal-profile: warning: failed to write cpufreq boost" >&2
 fi
 
-for d in /sys/devices/system/cpu/cpufreq/policy*; do
+for d in "$cpufreq_dir"/policy*; do
   [ -d "$d" ] || continue
   if [ "$max_freq" = "uncapped" ] && [ -w "$d/scaling_max_freq" ] && [ -r "$d/cpuinfo_max_freq" ]; then
     cat "$d/cpuinfo_max_freq" > "$d/scaling_max_freq" 2>/dev/null ||
@@ -381,16 +440,17 @@ for d in /sys/devices/system/cpu/cpufreq/policy*; do
   fi
 done
 exit 0
-' sh "$([[ "$boost" = "on" ]] && echo 1 || echo 0)" "$max_freq"
+' sh "$CPUFREQ_DIR" "$([[ "$boost" = "on" ]] && echo 1 || echo 0)" "$max_freq"
 
 # EPP files only exist when the cpufreq driver runs in EPP mode (for example
 # amd-pstate-epp). On passive/guided drivers no policy is writable; warn and
 # continue so RyzenAdj limits and the state file are still applied.
 # shellcheck disable=SC2016
 "${SUDO[@]}" sh -c '
-epp="$1"
+cpufreq_dir="$1"
+epp="$2"
 applied=0
-for d in /sys/devices/system/cpu/cpufreq/policy*; do
+for d in "$cpufreq_dir"/policy*; do
   [ -w "$d/energy_performance_preference" ] || continue
   if echo "$epp" > "$d/energy_performance_preference" 2>/dev/null; then
     applied=$((applied + 1))
@@ -402,14 +462,34 @@ if [ "$applied" -eq 0 ]; then
   echo "elitebook-thermal-profile: warning: no cpufreq policy accepted EPP $epp; skipping EPP (cpufreq driver not in EPP mode?)" >&2
 fi
 exit 0
-' sh "$epp"
+' sh "$CPUFREQ_DIR" "$epp"
 
-"${SUDO[@]}" "$RYZENADJ_BIN" \
-  --stapm-limit="$stapm" \
-  --fast-limit="$fast" \
-  --slow-limit="$slow" \
-  --apu-slow-limit="$apu" \
-  --tctl-temp="$tctl"
+# SMU limits are the part that needs RyzenAdj, and the part Secure Boot can
+# block. Everything above already applied. Record what happened instead of
+# aborting, so the state file and the panel indicator stay truthful and a
+# degraded run is visible rather than silent.
+smu_status=unavailable
+if [[ -n "$RYZENADJ_BIN" ]]; then
+  if "${SUDO[@]}" "$RYZENADJ_BIN" \
+    --stapm-limit="$stapm" \
+    --fast-limit="$fast" \
+    --slow-limit="$slow" \
+    --apu-slow-limit="$apu" \
+    --tctl-temp="$tctl"; then
+    smu_status=ok
+  else
+    lockdown="$(kernel_lockdown_mode)"
+    if [[ "$lockdown" != "none" && "$lockdown" != "unavailable" ]]; then
+      smu_status=blocked
+      echo "elitebook-thermal-profile: warning: RyzenAdj could not apply SMU limits; kernel lockdown is '$lockdown', which Secure Boot normally enables. CPU policy (EPP, boost, frequency) was applied. See docs/troubleshooting.md." >&2
+    else
+      smu_status=failed
+      echo "elitebook-thermal-profile: warning: RyzenAdj failed to apply SMU limits. CPU policy (EPP, boost, frequency) was applied." >&2
+    fi
+  fi
+else
+  echo "elitebook-thermal-profile: warning: RyzenAdj not found; applied CPU policy only (EPP, boost, frequency). Install ryzenadj for the SMU power limits, or set RYZENADJ=/path/to/ryzenadj." >&2
+fi
 
 write_state
 

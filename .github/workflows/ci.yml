@@ -55,6 +55,8 @@ jobs:
         run: tests/test-hibernate-preflight.sh
       - name: Run platform detection tests
         run: tests/test-platform-detection.sh
+      - name: Run SMU fallback tests
+        run: tests/test-smu-fallback.sh
 
   ruff:
     name: Ruff (Python watchers)

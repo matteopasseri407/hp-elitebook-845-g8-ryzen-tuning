@@ -1,5 +1,5 @@
 Name:           elitebook-thermal-profile
-Version:        0.4.2
+Version:        0.5.0
 Release:        1%{?dist}
 Summary:        Thermal and power profiles for HP AMD Cezanne laptops
 
@@ -176,6 +176,15 @@ fi
 %{_datadir}/gnome-shell/extensions/%{extension_uuid}/
 
 %changelog
+* Wed Jul 29 2026 Matteo Passeri <matteopasseri407@users.noreply.github.com> - 0.5.0-1
+- Apply the CPU-level part of a profile (EPP, boost, frequency cap) even when
+  RyzenAdj is missing or blocked by kernel lockdown, rather than refusing to
+  run or aborting before the state file is written
+- Record the outcome in the state file as smu=ok, unavailable, blocked, or
+  failed, and report a degraded machine from elitebook-power-guard check
+- Name the detected machine in --check-hardware instead of always naming the
+  development laptop
+
 * Wed Jul 29 2026 Matteo Passeri <matteopasseri407@users.noreply.github.com> - 0.4.2-1
 - Refuse to install from source on top of a packaged installation: the source
   units in /etc/systemd/system override the packaged ones, so the two together
