@@ -1,3 +1,11 @@
+elitebook-thermal-profile (0.5.0) unstable; urgency=medium
+
+  * Apply the CPU-level part of a profile even when RyzenAdj is missing or
+    blocked by kernel lockdown, instead of refusing to run.
+  * Record the outcome as smu=ok|unavailable|blocked|failed in the state file.
+
+ -- Matteo Passeri <matteopasseri407@users.noreply.github.com>  Wed, 29 Jul 2026 18:20:00 +0200
+
 elitebook-thermal-profile (0.4.2) unstable; urgency=medium
 
   * Refuse to install from source on top of a packaged installation, and warn

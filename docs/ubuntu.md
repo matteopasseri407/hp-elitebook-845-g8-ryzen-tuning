@@ -33,27 +33,47 @@ reported as a fault on a Fedora install but treated as normal here.
 ## Before you start: Secure Boot
 
 This is the one thing that decides whether you get full control or a degraded
-fallback.
+fallback, and **Ubuntu enables Secure Boot by default on most installs**.
 
-RyzenAdj writes SMU power limits through `/dev/mem`. When the kernel runs in
-lockdown mode, that write is blocked. **Secure Boot normally puts the kernel
-into lockdown**, and Ubuntu enables Secure Boot by default on most installs.
+RyzenAdj reaches the SMU in two ways: it tries the `ryzen_smu` kernel module
+first, then falls back to `/dev/mem`. Secure Boot puts the kernel into
+lockdown mode, and lockdown blocks the `/dev/mem` path and refuses unsigned
+modules. Without one of them, the SMU limits — the sustained power envelope
+and the thermal target, the reason this project exists — cannot be written.
 
-Check both before installing:
+Check what you have:
 
 ```bash
-cat /sys/kernel/security/lockdown
-sudo bootctl status | grep -i "secure boot"
+cat /sys/kernel/security/lockdown          # want: [none] integrity confidentiality
+sudo mokutil --sb-state                    # want: SecureBoot disabled
 ```
 
-A healthy setup for this project reads `[none] integrity confidentiality`,
-meaning lockdown is off.
+You have three options.
 
-If lockdown is active, the installer warns and asks for confirmation. You can
-still install: EPP, boost, and CPU maximum frequency keep working through
-sysfs. What you lose is the SMU layer, which is where the sustained power
-limits and the thermal target live, so the main reason to use this project is
-gone. To get it back, disable Secure Boot in the BIOS.
+**1. Turn Secure Boot off (simplest).** On HP business laptops: press `F10` at
+boot, then Security, then Secure Boot, and disable it. Everything then works
+exactly as it does on Fedora. This is what the development machine runs.
+
+**2. Leave Secure Boot on and accept the degraded mode.** The dispatcher
+applies the CPU-level part of every profile — EPP, boost, and the frequency
+cap — writes `smu=blocked` in its state file, and exits successfully. Profile
+switching, the idle overlay, the low-battery guard, and the Steam watcher all
+keep working. What you lose is the SMU power envelope, which on the tested
+machine is what kept it off the 100 °C ceiling under sustained load. Check
+with:
+
+```bash
+grep smu= /run/elitebook-thermal-profile/current
+sudo elitebook-power-guard check
+```
+
+**3. Keep Secure Boot and sign the `ryzen_smu` module.** RyzenAdj's upstream
+documentation describes installing that module through DKMS and enrolling the
+UEFI keys DKMS generates, which makes the module loadable under Secure Boot.
+Because RyzenAdj prefers the module over `/dev/mem`, this should restore full
+SMU control with Secure Boot left on. **This path is not packaged, not
+automated, and not verified by this project** — no machine here has run it. If
+you try it, a report would be welcome.
 
 ## Install from the .deb packages
 

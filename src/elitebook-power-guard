@@ -334,6 +334,33 @@ check_hardware_guard() {
   fi
 }
 
+# The dispatcher records whether the SMU limits actually took effect. Surface
+# that here: a machine running on CPU policy alone is working, but it is not
+# doing the thing this project exists for, and that should not be silent.
+check_smu_state() {
+  local smu
+
+  smu="$(awk -F= '$1 == "smu" {print $2; exit}' "$STATE_DIR/current" 2>/dev/null || true)"
+
+  case "$smu" in
+    ok|"")
+      # Empty means the state file predates this field; nothing to report.
+      ;;
+    unavailable)
+      warn "SMU limits are not being applied: RyzenAdj is not installed. CPU policy (EPP, boost, frequency) is still active."
+      ;;
+    blocked)
+      warn "SMU limits are blocked by kernel lockdown, which Secure Boot normally enables. CPU policy (EPP, boost, frequency) is still active."
+      ;;
+    failed)
+      warn "RyzenAdj ran but failed to apply SMU limits. CPU policy (EPP, boost, frequency) is still active."
+      ;;
+    *)
+      warn "unrecognized SMU state '$smu' in the dispatcher state file"
+      ;;
+  esac
+}
+
 check_cpufreq_shape() {
   local drivers epp_missing=0 policy
 
@@ -459,6 +486,7 @@ main() {
   check_cpufreq_shape
   reload_udev_rules
   apply_auto_profile
+  check_smu_state
   ensure_watchers_active
 
   if ((${#issues[@]} > 0)); then

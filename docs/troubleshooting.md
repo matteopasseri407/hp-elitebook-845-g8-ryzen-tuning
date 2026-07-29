@@ -161,3 +161,29 @@ sudo elitebook-thermal-profile auto
 ```
 
 The exception is low-battery protection. If the battery is at or below the configured threshold, system automation can override manual or Steam-driven profiles and apply `battery-saver`.
+
+## The profile applies but temperatures do not change
+
+Check whether the SMU limits actually reached the hardware:
+
+```bash
+grep smu= /run/elitebook-thermal-profile/current
+```
+
+- `smu=ok` — the limits were applied. If temperatures are still high, the
+  profile values themselves are the thing to look at.
+- `smu=unavailable` — RyzenAdj is not installed. Only EPP, boost, and the
+  frequency cap are active. Install RyzenAdj, or point the dispatcher at it
+  with `RYZENADJ=/path/to/ryzenadj`.
+- `smu=blocked` — kernel lockdown refused the write, which Secure Boot
+  normally enables. Confirm with `cat /sys/kernel/security/lockdown`; anything
+  other than `[none]` blocks the `/dev/mem` path RyzenAdj falls back to.
+  Disabling Secure Boot in the firmware restores full control. See
+  [ubuntu.md](ubuntu.md) for the alternatives.
+- `smu=failed` — RyzenAdj ran and returned an error with lockdown off. Run it
+  by hand to see why: `sudo ryzenadj -i`.
+
+In the last three cases the `stapm_mw`, `fast_mw`, `slow_mw`, `apu_mw`, and
+`tctl_c` values in the state file record what was requested, not what the
+hardware is enforcing. `sudo elitebook-power-guard check` reports the same
+condition and exits non-zero.
