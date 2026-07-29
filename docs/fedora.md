@@ -53,31 +53,31 @@ That fallback is useful, but it is not equivalent to full SMU tuning.
 From the repository root:
 
 ```bash
-sudo ./scripts/install-fedora.sh
+sudo ./scripts/install.sh
 ```
 
 Without the Steam game watcher:
 
 ```bash
-sudo ./scripts/install-fedora.sh --without-steam-watcher
+sudo ./scripts/install.sh --without-steam-watcher
 ```
 
 Without the idle overlay watcher:
 
 ```bash
-sudo ./scripts/install-fedora.sh --without-idle-watcher
+sudo ./scripts/install.sh --without-idle-watcher
 ```
 
 Without the update guard timer:
 
 ```bash
-sudo ./scripts/install-fedora.sh --without-power-guard
+sudo ./scripts/install.sh --without-power-guard
 ```
 
 With the GNOME Shell indicator:
 
 ```bash
-sudo ./scripts/install-fedora.sh --with-gnome-extension
+sudo ./scripts/install.sh --with-gnome-extension
 gnome-extensions enable elitebook-thermal-profile@matteopasseri.github.io
 ```
 

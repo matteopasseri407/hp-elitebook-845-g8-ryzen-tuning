@@ -19,7 +19,7 @@ To install the systemd integration on different hardware, pass `--force`
 to the installer:
 
 ```bash
-sudo ./scripts/install-fedora.sh --force
+sudo ./scripts/install.sh --force
 ```
 
 Only do that when you have reviewed the profile values for your own hardware.

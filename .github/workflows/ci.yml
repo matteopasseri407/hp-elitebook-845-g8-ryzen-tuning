@@ -53,6 +53,8 @@ jobs:
         run: tests/test-hardware-guard.sh
       - name: Run hibernate preflight tests
         run: tests/test-hibernate-preflight.sh
+      - name: Run platform detection tests
+        run: tests/test-platform-detection.sh
 
   ruff:
     name: Ruff (Python watchers)
