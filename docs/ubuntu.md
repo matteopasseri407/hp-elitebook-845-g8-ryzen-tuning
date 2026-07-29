@@ -60,11 +60,14 @@ gone. To get it back, disable Secure Boot in the BIOS.
 Download both packages from the
 [latest release](https://github.com/matteopasseri407/hp-elitebook-845-g8-ryzen-tuning/releases/latest):
 
-- `elitebook-thermal-profile_*_all.deb`
-- `ryzenadj_*~ubuntuXX.YY_amd64.deb` — pick the one matching your Ubuntu
-  release. RyzenAdj is compiled, so the binary is tied to the release it was
-  built on. Debian users should build it from source instead, or use the
-  source installer's `--build-ryzenadj`.
+- `elitebook-thermal-profile_*_all.deb` — architecture independent, so the same
+  file works on any Ubuntu or Debian release.
+- `ryzenadj_*ubuntu24.04_amd64.deb` or `ryzenadj_*ubuntu26.04_amd64.deb` — pick
+  the one matching your release. RyzenAdj is compiled, so the binary is tied to
+  the release it was built on. The package version uses a tilde
+  (`0.17.0-1~ubuntu26.04`); GitHub shows a dot in the asset name instead.
+  On Debian, or on an Ubuntu release with no matching build, use the source
+  installer's `--build-ryzenadj` below.
 
 ```bash
 sudo apt install ./ryzenadj_*.deb ./elitebook-thermal-profile_*.deb
