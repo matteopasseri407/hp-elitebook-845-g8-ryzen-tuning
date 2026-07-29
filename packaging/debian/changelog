@@ -1,3 +1,10 @@
+elitebook-thermal-profile (0.4.2) unstable; urgency=medium
+
+  * Refuse to install from source on top of a packaged installation, and warn
+    from the package when a source installation is present.
+
+ -- Matteo Passeri <matteopasseri407@users.noreply.github.com>  Wed, 29 Jul 2026 17:05:00 +0200
+
 elitebook-thermal-profile (0.4.1) unstable; urgency=medium
 
   * Publish the packages as GitHub release assets, built and verified on

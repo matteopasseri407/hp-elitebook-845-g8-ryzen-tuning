@@ -126,6 +126,34 @@ jobs:
           dpkg -c dist/gnome-shell-extension-elitebook-thermal-profile_*.deb |
             grep -q "usr/share/gnome-shell/extensions/elitebook-thermal-profile@matteopasseri.github.io/extension.js"
 
+          echo "--- the indicator points at the packaged dispatcher ---"
+          # The extension calls the dispatcher by absolute path, so a missed
+          # rewrite here would leave a panel menu that silently does nothing.
+          ext_js="$(mktemp -d)/extension.js"
+          dpkg-deb --fsys-tarfile dist/gnome-shell-extension-elitebook-thermal-profile_*.deb |
+            tar -xO ./usr/share/gnome-shell/extensions/elitebook-thermal-profile@matteopasseri.github.io/extension.js \
+            >"$ext_js"
+          grep -q "'/usr/bin/elitebook-thermal-profile'" "$ext_js"
+          if grep -q "/usr/local/sbin" "$ext_js"; then
+            echo "the GNOME extension still points at /usr/local/sbin" >&2
+            exit 1
+          fi
+
+          echo "--- installing the package warns about a source install ---"
+          sudo install -D -m 0755 /bin/true /usr/local/sbin/elitebook-thermal-profile
+          # dpkg --configure is a no-op on an already configured package, so
+          # run the maintainer script directly to exercise the warning.
+          # Capture the output rather than piping it: grep -q closes the pipe
+          # on the first match, and under pipefail the resulting SIGPIPE would
+          # look like a failure even when the warning was printed.
+          postinst_output="$(sudo /var/lib/dpkg/info/elitebook-thermal-profile.postinst configure 2>&1 || true)"
+          sudo rm -f /usr/local/sbin/elitebook-thermal-profile
+          if ! echo "$postinst_output" | grep -q "a source installation is also present"; then
+            echo "the package did not warn about the coexisting source install" >&2
+            echo "postinst said: $postinst_output" >&2
+            exit 1
+          fi
+
       - name: Verify removal is clean
         run: |
           set -euo pipefail

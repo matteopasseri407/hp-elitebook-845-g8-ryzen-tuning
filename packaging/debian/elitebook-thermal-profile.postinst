@@ -2,6 +2,22 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 set -e
 
+if [ "$1" = "configure" ] && [ -e /usr/local/sbin/elitebook-thermal-profile ]; then
+  cat >&2 <<'EOF'
+
+WARNING: a source installation is also present.
+
+  /usr/local/sbin/elitebook-thermal-profile
+
+Its units in /etc/systemd/system take precedence over the ones this package
+installs, so that copy keeps running and this package will not be the code in
+use. Remove it with the installer from the source tree:
+
+  sudo ./scripts/install.sh --uninstall
+
+EOF
+fi
+
 if [ "$1" = "configure" ]; then
   cat <<'EOF'
 elitebook-thermal-profile installed.

@@ -77,6 +77,32 @@ elif ! grep -qF "only supported on Fedora-like systems" "$TMPDIR/preflight.err";
   fail "installer rejected --with-hibernate-preflight without explaining why"
 fi
 
+# A packaged install and a source install would fight over which copy runs, so
+# the installer must refuse rather than create that state.
+packaged_bin="$TMPDIR/packaged-elitebook-thermal-profile"
+: >"$packaged_bin"
+if ELITEBOOK_OS_RELEASE="$ubuntu_os" ELITEBOOK_PACKAGED_BIN="$packaged_bin" \
+  "$REPO_DIR/scripts/install.sh" >"$TMPDIR/packaged.out" 2>"$TMPDIR/packaged.err"; then
+  fail "installer proceeded on top of a packaged installation"
+elif ! grep -qF "a packaged installation is already present" "$TMPDIR/packaged.err"; then
+  fail "installer did not explain the packaged-install conflict"
+elif grep -qF "owned by" "$TMPDIR/packaged.err"; then
+  # The fixture belongs to no package. Claiming an owner here means the query
+  # tool's failure message was mistaken for a package name, which is what
+  # happens when its localised output is parsed instead of its exit status.
+  fail "installer invented a package owner for an unowned file"
+fi
+
+# The same check must stay quiet when no package is installed, otherwise it
+# would block every ordinary source install. Without root the installer stops
+# at the privilege check, which is how we know it got past the package check.
+if ELITEBOOK_OS_RELEASE="$ubuntu_os" ELITEBOOK_PACKAGED_BIN="$TMPDIR/no-such-binary" \
+  "$REPO_DIR/scripts/install.sh" >"$TMPDIR/nopkg.out" 2>"$TMPDIR/nopkg.err"; then
+  fail "installer unexpectedly succeeded without root"
+elif ! grep -qF "run this installer with sudo" "$TMPDIR/nopkg.err"; then
+  fail "the packaged-install check fired when nothing is packaged"
+fi
+
 # --- power guard backend handling -----------------------------------------
 
 # Minimal systemctl stub: unit state comes from files in FAKE_SYSTEMCTL_DIR,

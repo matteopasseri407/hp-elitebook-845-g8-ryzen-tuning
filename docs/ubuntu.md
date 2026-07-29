@@ -161,6 +161,33 @@ cat /sys/devices/system/cpu/cpufreq/policy0/scaling_driver   # expect amd-pstate
 If the driver is `acpi-cpufreq` or `amd-pstate` in passive mode, EPP writes are
 skipped with a warning and only boost, frequency caps, and SMU limits apply.
 
+## Do not mix the package and the source installer
+
+They install to different places: the package uses `/usr/bin` and
+`/usr/lib/systemd/system`, the source installer uses `/usr/local/sbin` and
+`/etc/systemd/system`. Units in `/etc` take precedence, so a source install on
+top of a packaged one keeps the package registered while a different copy
+actually runs, and a later package upgrade changes nothing.
+
+The installer refuses to run when it finds a packaged install, and the package
+warns when it finds a source install. Pick one: the package for a normal
+install, the source tree when developing or when no `.deb` matches your system.
+
+## Steam detection with the Snap package
+
+The Steam watcher finds games by locating the `steam` and `steamwebhelper`
+processes and walking down to their children. This is verified against a
+system Steam package. Ubuntu also ships Steam as a Snap, where the processes
+start under `snap-confine` and the tree has an extra level; that has not been
+tested.
+
+If it does not work there, the failure is harmless: the watcher simply never
+switches to the `gaming` profile, and everything else keeps working. Check with:
+
+```bash
+cat /run/elitebook-thermal-profile/steam-game-watcher
+```
+
 ## Not available here
 
 - **APT repository or PPA.** The `.deb` packages are attached to GitHub
