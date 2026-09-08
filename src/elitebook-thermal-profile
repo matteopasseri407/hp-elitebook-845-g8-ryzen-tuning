@@ -1,29 +1,160 @@
-#!/usr/bin/env bash
+#!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
-set -euo pipefail
+"""HP EliteBook thermal profile dispatcher.
 
-# Keep in step with packaging/rpm/elitebook-thermal-profile.spec and
-# packaging/debian/changelog; tests/test-version-consistency.sh enforces it.
-ELITEBOOK_VERSION="0.7.0"
+Applies AC/battery power profiles via AMD P-State sysfs, tuned (on Fedora),
+and RyzenAdj SMU limits. Keeps the exact CLI, environment variables, state
+file format and warning strings of the original bash dispatcher so callers
+(systemd, udev, sleep hook, watchers, GNOME extension, power-guard) keep
+working unchanged.
 
-STATE_DIR="${ELITEBOOK_THERMAL_STATE_DIR:-/run/elitebook-thermal-profile}"
-STATE_FILE="$STATE_DIR/current"
-THERMAL_FILE="$STATE_DIR/thermal"
-LOCK_FILE="$STATE_DIR/dispatcher.lock"
-POWER_SUPPLY_DIR="${ELITEBOOK_POWER_SUPPLY_DIR:-/sys/class/power_supply}"
-DMI_ID_DIR="${ELITEBOOK_DMI_ID_DIR:-/sys/class/dmi/id}"
-CPUINFO_PATH="${ELITEBOOK_CPUINFO_PATH:-/proc/cpuinfo}"
-CPUFREQ_DIR="${ELITEBOOK_CPUFREQ_DIR:-/sys/devices/system/cpu/cpufreq}"
-LOCKDOWN_PATH="${ELITEBOOK_LOCKDOWN_PATH:-/sys/kernel/security/lockdown}"
-PROFILE_CONF="${ELITEBOOK_PROFILE_CONF:-/etc/elitebook-thermal-profile/profiles.conf}"
-HWMON_DIR="${ELITEBOOK_HWMON_DIR:-/sys/class/hwmon}"
+Only the standard library is used: this runs as root from systemd/udev and
+must not grow new runtime dependencies. Shared sysfs helpers live in
+``elitebook_common`` next to this file.
+"""
 
-DETECTED_PRODUCT=""
-DETECTED_CPU=""
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import typing
+from datetime import datetime
+from pathlib import Path
 
-usage() {
-  cat >&2 <<EOF
-Usage: elitebook-thermal-profile [COMMAND]
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+import elitebook_common as common  # noqa: E402
+
+ELITEBOOK_VERSION = "0.8.0"
+
+STATE_DIR = Path(
+    os.environ.get("ELITEBOOK_THERMAL_STATE_DIR", "/run/elitebook-thermal-profile")
+)
+STATE_FILE = STATE_DIR / "current"
+THERMAL_FILE = STATE_DIR / "thermal"
+POWER_SUPPLY_DIR = Path(
+    os.environ.get("ELITEBOOK_POWER_SUPPLY_DIR", "/sys/class/power_supply")
+)
+DMI_ID_DIR = Path(os.environ.get("ELITEBOOK_DMI_ID_DIR", "/sys/class/dmi/id"))
+CPUINFO_PATH = Path(os.environ.get("ELITEBOOK_CPUINFO_PATH", "/proc/cpuinfo"))
+CPUFREQ_DIR = Path(
+    os.environ.get("ELITEBOOK_CPUFREQ_DIR", "/sys/devices/system/cpu/cpufreq")
+)
+LOCKDOWN_PATH = Path(
+    os.environ.get("ELITEBOOK_LOCKDOWN_PATH", "/sys/kernel/security/lockdown")
+)
+PROFILE_CONF = Path(
+    os.environ.get(
+        "ELITEBOOK_PROFILE_CONF", "/etc/elitebook-thermal-profile/profiles.conf"
+    )
+)
+HWMON_DIR = Path(os.environ.get("ELITEBOOK_HWMON_DIR", "/sys/class/hwmon"))
+
+PROG = "elitebook-thermal-profile"
+
+SUPPORTED_PRODUCT_SUBSTRINGS = (
+    "EliteBook 835 G7",
+    "EliteBook 835 G8",
+    "EliteBook 835 G9",
+    "EliteBook 845 G7",
+    "EliteBook 845 G8",
+    "EliteBook 845 G9",
+    "ProBook 445 G8",
+    "ProBook 445 G9",
+    "ProBook 455 G8",
+    "ProBook 455 G9",
+)
+CEZANNE_RE = re.compile(r"AMD Ryzen (5|7) PRO (5650U|5750U|5850U)")
+REMBRANDT_RE = re.compile(r"AMD Ryzen (5|7) PRO (6650U|6850U)")
+VALID_EPPS = ("performance", "balance_performance", "balance_power", "power")
+
+# (epp, stapm, fast, slow, apu, tctl, boost, max_freq_default, tuned_profile)
+# max_freq_default is None for "uncapped", else a kHz string. battery-saver
+# resolves its cap from ELITEBOOK_BATTERY_SAVER_MAX_FREQ_KHZ at runtime.
+BUILTIN_PROFILES = {
+    "ac": ("balance_power", 22000, 30000, 18000, 18000, 90, "on", None, "balanced"),
+    "performance": (
+        "balance_performance",
+        22000,
+        30000,
+        18000,
+        18000,
+        90,
+        "on",
+        None,
+        "balanced",
+    ),
+    "battery": (
+        "balance_power",
+        18000,
+        30000,
+        15000,
+        15000,
+        88,
+        "on",
+        None,
+        "balanced",
+    ),
+    "battery-saver": (
+        "power",
+        10000,
+        15000,
+        8000,
+        8000,
+        80,
+        "off",
+        "BATTERY_SAVER_ENV",
+        "powersave",
+    ),
+    "gaming": (
+        "balance_performance",
+        30000,
+        30000,
+        23000,
+        23000,
+        92,
+        "on",
+        None,
+        "balanced",
+    ),
+    "cool": ("power", 16000, 22000, 12000, 12000, 85, "on", None, "balanced"),
+}
+
+SUDO_PRESERVE_ENV = (
+    "RYZENADJ",
+    "ELITEBOOK_PROFILE_SOURCE",
+    "ELITEBOOK_THERMAL_FORCE",
+    "ELITEBOOK_LOW_BATTERY_THRESHOLD",
+    "ELITEBOOK_BATTERY_SAVER_MAX_FREQ_KHZ",
+    "ELITEBOOK_THERMAL_STATE_DIR",
+    "ELITEBOOK_POWER_SUPPLY_DIR",
+    "ELITEBOOK_DMI_ID_DIR",
+    "ELITEBOOK_CPUINFO_PATH",
+    "ELITEBOOK_CPUFREQ_DIR",
+    "ELITEBOOK_LOCKDOWN_PATH",
+    "ELITEBOOK_RYZENADJ_SEARCH_PATHS",
+    "ELITEBOOK_PROFILE_CONF",
+    "ELITEBOOK_HWMON_DIR",
+)
+
+DETECTED_PRODUCT = ""
+DETECTED_CPU = ""
+
+
+def die(message: str) -> typing.NoReturn:
+    print(f"{PROG}: {message}", file=sys.stderr)
+    raise SystemExit(1)
+
+
+def warn(message: str) -> None:
+    print(f"{PROG}: warning: {message}", file=sys.stderr)
+
+
+def usage() -> None:
+    print(
+        f"""Usage: {PROG} [COMMAND]
 
 Profiles (need root):
   auto              Pick by power source and battery level
@@ -36,12 +167,13 @@ Profiles (need root):
 
 Commands:
   status            Show what is applied right now (no root needed)
+  status --json     Same as status, as JSON for scripts (no root needed)
   --check-hardware  Verify this machine is supported
   --version         Print the version
   -h, --help        Show this help
 
 Configuration:
-  $PROFILE_CONF
+  {PROFILE_CONF}
   Overrides individual profile values and survives package upgrades.
   See docs/configuration.md.
 
@@ -50,724 +182,716 @@ Environment:
   ELITEBOOK_PROFILE_SOURCE=manual|auto|system-auto|steam-game-watcher
   ELITEBOOK_THERMAL_FORCE=1   skip the supported-hardware guard
   ELITEBOOK_LOW_BATTERY_THRESHOLD=20
-  ELITEBOOK_BATTERY_SAVER_MAX_FREQ_KHZ=1800000
-EOF
-}
-
-die() {
-  echo "elitebook-thermal-profile: $*" >&2
-  exit 1
-}
-
-read_trimmed() {
-  local path="$1"
-  [[ -r "$path" ]] || return 0
-  tr -d '\0' <"$path" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//'
-}
-
-truthy() {
-  case "${1:-}" in
-    1|true|TRUE|yes|YES|on|ON) return 0 ;;
-    *) return 1 ;;
-  esac
-}
-
-is_uint() {
-  [[ "${1:-}" =~ ^[0-9]+$ ]]
-}
-
-is_supported_product() {
-  case "$1" in
-    *"EliteBook 835 G7"*|*"EliteBook 835 G8"*|*"EliteBook 835 G9"*|\
-    *"EliteBook 845 G7"*|*"EliteBook 845 G8"*|*"EliteBook 845 G9"*|\
-    *"ProBook 445 G8"*|*"ProBook 445 G9"*|\
-    *"ProBook 455 G8"*|*"ProBook 455 G9"*)
-      return 0
-      ;;
-    *)
-      return 1
-      ;;
-  esac
-}
-
-is_validated_cezanne_cpu() {
-  [[ "$1" =~ AMD\ Ryzen\ (5|7)\ PRO\ (5650U|5750U|5850U) ]]
-}
-
-is_known_rembrandt_cpu() {
-  [[ "$1" =~ AMD\ Ryzen\ (5|7)\ PRO\ (6650U|6850U) ]]
-}
-
-on_ac_power() {
-  if [[ -r "$POWER_SUPPLY_DIR/AC/online" ]]; then
-    [[ "$(cat "$POWER_SUPPLY_DIR/AC/online")" = "1" ]]
-    return
-  fi
-
-  local supply type online
-  for supply in "$POWER_SUPPLY_DIR"/*; do
-    [[ -r "$supply/type" ]] || continue
-    type="$(read_trimmed "$supply/type")"
-    [[ "$type" = "Mains" ]] || continue
-    [[ -r "$supply/online" ]] || continue
-    online="$(read_trimmed "$supply/online")"
-    [[ "$online" = "1" ]]
-    return
-  done
-
-  return 1
-}
-
-battery_device() {
-  local supply type
-  for supply in "$POWER_SUPPLY_DIR"/*; do
-    [[ -r "$supply/type" ]] || continue
-    type="$(read_trimmed "$supply/type")"
-    if [[ "$type" = "Battery" ]]; then
-      echo "$supply"
-      return 0
-    fi
-  done
-  return 1
-}
-
-battery_capacity() {
-  local supply capacity
-  supply="$(battery_device)" || return 1
-  [[ -r "$supply/capacity" ]] || return 1
-  capacity="$(read_trimmed "$supply/capacity")"
-  is_uint "$capacity" || return 1
-  echo "$capacity"
-}
-
-battery_is_low() {
-  local threshold capacity
-  threshold="${ELITEBOOK_LOW_BATTERY_THRESHOLD:-20}"
-  is_uint "$threshold" || die "ELITEBOOK_LOW_BATTERY_THRESHOLD must be an integer percentage"
-  [[ "$threshold" -gt 0 ]] || return 1
-  on_ac_power && return 1
-  capacity="$(battery_capacity)" || return 1
-  [[ "$capacity" -le "$threshold" ]]
-}
-
-# CPU package temperature. k10temp is the in-tree driver; zenpower is a common
-# out-of-tree replacement for it on Ryzen systems, and a machine running that
-# one has no k10temp at all, so both are accepted.
-cpu_temperature_c() {
-  local wanted hwmon name temp
-
-  for wanted in k10temp zenpower; do
-    for hwmon in "$HWMON_DIR"/hwmon*; do
-      [[ -r "$hwmon/name" ]] || continue
-      name="$(read_trimmed "$hwmon/name")"
-      [[ "$name" = "$wanted" ]] || continue
-      [[ -r "$hwmon/temp1_input" ]] || continue
-      temp="$(read_trimmed "$hwmon/temp1_input")"
-      is_uint "$temp" || continue
-      echo $((temp / 1000))
-      return 0
-    done
-  done
-
-  return 1
-}
-
-thermal_value() {
-  local key="$1"
-  awk -F= -v key="$key" '$1 == key {print $2; exit}' "$THERMAL_FILE" 2>/dev/null || true
-}
-
-# The idle watcher records the package temperature while a profile is active.
-# Without it there is no way to tell a profile that is holding from one that
-# is being overrun, so surface it when the record exists.
-print_thermal_record() {
-  local peak target samples over percent
-
-  [[ -r "$THERMAL_FILE" ]] || return 0
-
-  peak="$(thermal_value peak_c)"
-  target="$(thermal_value target_c)"
-  samples="$(thermal_value samples)"
-  over="$(thermal_value over_target)"
-
-  is_uint "$peak" && [[ "$peak" -gt 0 ]] || return 0
-
-  if is_uint "$target" && [[ "$target" -gt 0 ]]; then
-    printf 'Peak:         %s C since this profile was applied (target %s C)\n' "$peak" "$target"
-  else
-    printf 'Peak:         %s C since this profile was applied\n' "$peak"
-  fi
-
-  if is_uint "$samples" && is_uint "$over" && [[ "$samples" -gt 0 ]]; then
-    percent=$((over * 100 / samples))
-    if [[ "$over" -eq 0 ]]; then
-      printf 'Above target: never, over %s samples\n' "$samples"
-    else
-      printf 'Above target: %s%% of %s samples\n' "$percent" "$samples"
-    fi
-  fi
-}
-
-# Human-readable view of what the dispatcher last did. Deliberately runs
-# without root: it only reads the state file and sysfs, and it is the first
-# thing to reach for when the laptop is not behaving as expected.
-print_status() {
-  local profile source smu epp boost max_freq updated
-  local stapm fast slow apu tctl battery temp freq_text
-
-  if [[ ! -r "$STATE_FILE" ]]; then
-    echo "No profile has been applied yet (no state file at $STATE_FILE)."
-    echo "Apply one with: sudo elitebook-thermal-profile auto"
-    return 0
-  fi
-
-  profile="$(current_value profile)"
-  source="$(current_value source)"
-  smu="$(current_value smu)"
-  epp="$(current_value epp)"
-  boost="$(current_value boost)"
-  max_freq="$(current_value max_freq)"
-  stapm="$(current_value stapm_mw)"
-  fast="$(current_value fast_mw)"
-  slow="$(current_value slow_mw)"
-  apu="$(current_value apu_mw)"
-  tctl="$(current_value tctl_c)"
-  updated="$(current_value updated)"
-
-  case "$source" in
-    manual) source="set manually" ;;
-    auto) source="automatic (AC/battery)" ;;
-    system-auto) source="system automation" ;;
-    steam-game-watcher) source="Steam game detected" ;;
-    guard-fallback) source="update guard fallback" ;;
-    "") source="unknown" ;;
-  esac
-
-  if [[ "$max_freq" = "uncapped" || -z "$max_freq" ]]; then
-    freq_text="uncapped"
-  else
-    freq_text="$((max_freq / 1000)) MHz"
-  fi
-
-  printf 'Profile:      %s (%s)\n' "${profile:-unknown}" "$source"
-
-  case "$smu" in
-    ok)
-      printf 'SMU limits:   applied\n'
-      ;;
-    unavailable)
-      printf 'SMU limits:   NOT applied - RyzenAdj is not installed\n'
-      ;;
-    blocked)
-      printf 'SMU limits:   NOT applied - blocked by kernel lockdown (Secure Boot)\n'
-      ;;
-    failed)
-      printf 'SMU limits:   NOT applied - RyzenAdj returned an error\n'
-      ;;
-    *)
-      printf 'SMU limits:   unknown (state written by an older version)\n'
-      ;;
-  esac
-
-  printf 'CPU policy:   EPP %s, boost %s, max frequency %s\n' \
-    "${epp:-unknown}" "${boost:-unknown}" "$freq_text"
-
-  case "$smu" in
-    ok)
-      printf 'Power limits: sustained %s W, burst %s W, thermal target %s C\n' \
-        "$((${slow:-0} / 1000))" "$((${fast:-0} / 1000))" "${tctl:-?}"
-      ;;
-    "")
-      # State from a version that predates SMU reporting. Do not claim the
-      # limits failed: on such a machine they were almost certainly applied.
-      printf 'Power limits: recorded %s W sustained, %s W burst, %s C target\n' \
-        "$((${slow:-0} / 1000))" "$((${fast:-0} / 1000))" "${tctl:-?}"
-      ;;
-    *)
-      printf 'Power limits: requested %s W sustained / %s W burst / %s C, NOT in force\n' \
-        "$((${slow:-0} / 1000))" "$((${fast:-0} / 1000))" "${tctl:-?}"
-      ;;
-  esac
-
-  battery="$(battery_capacity || true)"
-  if [[ -n "$battery" ]]; then
-    if on_ac_power; then
-      printf 'Battery:      %s%% (on AC)\n' "$battery"
-    else
-      printf 'Battery:      %s%% (on battery)\n' "$battery"
-    fi
-  fi
-
-  temp="$(cpu_temperature_c || true)"
-  [[ -n "$temp" ]] && printf 'CPU temp:     %s C\n' "$temp"
-
-  print_thermal_record
-
-  printf 'Updated:      %s\n' "${updated:-unknown}"
-
-  if [[ -n "$smu" && "$smu" != "ok" ]]; then
-    printf '\nThis machine is running on CPU policy alone. See:\n'
-    printf '  https://github.com/matteopasseri407/hp-elitebook-845-g8-ryzen-tuning/blob/main/docs/troubleshooting.md\n'
-  fi
-}
-
-find_ryzenadj() {
-  local candidate
-
-  if [[ -n "${RYZENADJ:-}" ]]; then
-    [[ -x "$RYZENADJ" ]] || die "RYZENADJ is set but is not executable: $RYZENADJ"
-    echo "$RYZENADJ"
-    return 0
-  fi
-
-  # Overridable so the degraded path can be exercised on a machine that does
-  # have RyzenAdj installed.
-  # shellcheck disable=SC2206
-  local search=(${ELITEBOOK_RYZENADJ_SEARCH_PATHS:-/usr/local/sbin/ryzenadj /usr/local/bin/ryzenadj /usr/bin/ryzenadj})
-
-  for candidate in "${search[@]}"; do
-    if [[ -x "$candidate" ]]; then
-      echo "$candidate"
-      return 0
-    fi
-  done
-
-  if command -v ryzenadj >/dev/null 2>&1; then
-    command -v ryzenadj
-    return 0
-  fi
-
-  # Not finding RyzenAdj is not fatal. The SMU limits are the reason this
-  # project exists, but EPP, boost, and the frequency cap are applied through
-  # sysfs and work on their own, so apply what is available and say what is
-  # missing instead of refusing to run at all.
-  return 1
-}
-
-# Reports the active kernel lockdown mode: none, integrity, confidentiality,
-# or unavailable when the kernel does not expose it. Secure Boot normally
-# turns lockdown on, and lockdown is what blocks RyzenAdj's /dev/mem access.
-kernel_lockdown_mode() {
-  local content
-
-  [[ -r "$LOCKDOWN_PATH" ]] || { echo unavailable; return; }
-
-  content="$(tr -d '\0\n' <"$LOCKDOWN_PATH")"
-  if [[ "$content" == *"[none]"* ]]; then
-    echo none
-  elif [[ "$content" =~ \[([^]]+)\] ]]; then
-    echo "${BASH_REMATCH[1]}"
-  else
-    echo "${content:-unknown}"
-  fi
-}
-
-assert_supported_hardware() {
-  truthy "${ELITEBOOK_THERMAL_FORCE:-}" && return 0
-
-  local vendor product cpu
-  vendor="$(read_trimmed "$DMI_ID_DIR/sys_vendor")"
-  # Recorded for the --check-hardware message, which used to name the
-  # development machine no matter what it was actually running on.
-  DETECTED_PRODUCT=""
-  DETECTED_CPU=""
-  product="$(read_trimmed "$DMI_ID_DIR/product_name")"
-  cpu="$(awk -F: '/model name/ {sub(/^[ \t]+/, "", $2); print $2; exit}' "$CPUINFO_PATH" 2>/dev/null || true)"
-  DETECTED_PRODUCT="$product"
-  DETECTED_CPU="$cpu"
-
-  [[ "$vendor" == "HP" || "$vendor" == "Hewlett-Packard" ]] ||
-    die "unsupported vendor '$vendor' (set ELITEBOOK_THERMAL_FORCE=1 to override)"
-
-  is_supported_product "$product" ||
-    die "unsupported product '$product' (set ELITEBOOK_THERMAL_FORCE=1 to override)"
-
-  if is_validated_cezanne_cpu "$cpu"; then
-    return 0
-  fi
-
-  if is_known_rembrandt_cpu "$cpu"; then
-    die "known HP AMD Rembrandt hardware '$product' / '$cpu' is not enabled yet because these SMU limits are only validated on Cezanne (set ELITEBOOK_THERMAL_FORCE=1 to override after reviewing profile values)"
-  fi
-
-  die "unsupported CPU '$cpu' (validated Cezanne CPUs: Ryzen PRO 5650U, 5750U, 5850U; set ELITEBOOK_THERMAL_FORCE=1 to override)"
-}
-
-detect_profile() {
-  if on_ac_power; then
-    echo ac
-  elif battery_is_low; then
-    echo battery-saver
-  else
-    echo battery
-  fi
-}
-
-current_value() {
-  local key="$1"
-  awk -F= -v key="$key" '$1 == key {print $2; exit}' "$STATE_FILE" 2>/dev/null || true
-}
-
-# Reads one key from the profile configuration file. The file is parsed, never
-# sourced: a stray line in it must not be able to run commands as root.
-profile_conf_value() {
-  local key="$1" value
-
-  [[ -r "$PROFILE_CONF" ]] || return 1
-
-  value="$(sed -n "s/^[[:space:]]*${key}[[:space:]]*=[[:space:]]*//p" "$PROFILE_CONF" | tail -n 1)"
-  value="${value%%#*}"
-  value="${value//[[:space:]]/}"
-  [[ -n "$value" ]] || return 1
-
-  printf '%s' "$value"
-}
-
-# Power limits are exactly the numbers that cook a laptop when copied from a
-# desktop guide, so overrides are clamped to a range the tested chassis can
-# survive. A rejected value keeps the built-in default: a typo in this file
-# must never leave the machine running untuned.
-override_uint() {
-  local key="$1" min="$2" max="$3" current="$4" value
-
-  value="$(profile_conf_value "$key")" || { printf '%s' "$current"; return; }
-
-  if ! is_uint "$value"; then
-    echo "elitebook-thermal-profile: warning: $PROFILE_CONF: $key='$value' is not an integer; keeping $current" >&2
-    printf '%s' "$current"
-    return
-  fi
-
-  if ((value < min || value > max)); then
-    echo "elitebook-thermal-profile: warning: $PROFILE_CONF: $key=$value is outside the safe range ${min}-${max}; keeping $current" >&2
-    printf '%s' "$current"
-    return
-  fi
-
-  printf '%s' "$value"
-}
-
-override_epp() {
-  local key="$1" current="$2" value
-
-  value="$(profile_conf_value "$key")" || { printf '%s' "$current"; return; }
-
-  case "$value" in
-    performance|balance_performance|balance_power|power)
-      printf '%s' "$value"
-      ;;
-    *)
-      echo "elitebook-thermal-profile: warning: $PROFILE_CONF: $key='$value' is not a valid EPP hint; keeping $current" >&2
-      printf '%s' "$current"
-      ;;
-  esac
-}
-
-# Per-profile overrides, keyed by profile name: AC_SLOW_MW, COOL_TCTL_C,
-# BATTERY_SAVER_EPP and so on. Anything absent keeps the built-in value, so a
-# user only writes down what they want to change.
-apply_profile_overrides() {
-  local prefix
-
-  [[ -r "$PROFILE_CONF" ]] || return 0
-
-  prefix="$(printf '%s' "$1" | tr '[:lower:]' '[:upper:]' | tr '-' '_')"
-
-  stapm="$(override_uint "${prefix}_STAPM_MW" 4000 45000 "$stapm")"
-  fast="$(override_uint "${prefix}_FAST_MW" 4000 45000 "$fast")"
-  slow="$(override_uint "${prefix}_SLOW_MW" 4000 45000 "$slow")"
-  apu="$(override_uint "${prefix}_APU_MW" 4000 45000 "$apu")"
-  tctl="$(override_uint "${prefix}_TCTL_C" 60 100 "$tctl")"
-  epp="$(override_epp "${prefix}_EPP" "$epp")"
-}
-
-write_state() {
-  local battery_percent tmp
-  battery_percent="$(battery_capacity || true)"
-  [[ -n "$battery_percent" ]] || battery_percent="unknown"
-
-  "${SUDO[@]}" install -d -m 0755 "$STATE_DIR"
-  tmp="$STATE_FILE.tmp.$$"
-  # smu records whether the RyzenAdj limits below actually took effect:
-  #   ok          applied
-  #   unavailable RyzenAdj is not installed
-  #   blocked     kernel lockdown refused the write (usually Secure Boot)
-  #   failed      RyzenAdj ran and returned an error
-  # When it is not ok, the stapm/fast/slow/apu/tctl values are what was
-  # requested, not what the hardware is running.
-  printf 'profile=%s\nsource=%s\nepp=%s\nsmu=%s\nstapm_mw=%s\nfast_mw=%s\nslow_mw=%s\napu_mw=%s\ntctl_c=%s\nboost=%s\nmax_freq=%s\nbattery_percent=%s\nlow_battery_threshold_percent=%s\nupdated=%s\n' \
-    "$profile" "$profile_source" "$epp" "${smu_status:-unknown}" "$stapm" "$fast" "$slow" "$apu" "$tctl" "$boost" "$max_freq" "$battery_percent" "${ELITEBOOK_LOW_BATTERY_THRESHOLD:-20}" "$(date --iso-8601=seconds)" |
-    "${SUDO[@]}" tee "$tmp" >/dev/null
-  "${SUDO[@]}" chmod 0644 "$tmp"
-  "${SUDO[@]}" mv -f "$tmp" "$STATE_FILE"
-}
-
-requested_profile="${1:-auto}"
-
-# These answer questions about the machine rather than changing it, so they
-# run before the hardware guard and without root.
-case "$requested_profile" in
-  --help|-h)
-    usage
-    exit 0
-    ;;
-  --version)
-    echo "elitebook-thermal-profile $ELITEBOOK_VERSION"
-    exit 0
-    ;;
-  status)
-    print_status
-    exit 0
-    ;;
-esac
-
-assert_supported_hardware
-
-if [[ "$requested_profile" = "--check-hardware" ]]; then
-  if truthy "${ELITEBOOK_THERMAL_FORCE:-}"; then
-    echo "Hardware guard skipped: ELITEBOOK_THERMAL_FORCE is set."
-  else
-    echo "Supported hardware detected: ${DETECTED_PRODUCT:-unknown product} / ${DETECTED_CPU:-unknown CPU}."
-  fi
-  exit 0
-fi
-
-if [[ "${EUID}" -ne 0 ]]; then
-  exec sudo \
-    RYZENADJ="${RYZENADJ:-}" \
-    ELITEBOOK_PROFILE_SOURCE="${ELITEBOOK_PROFILE_SOURCE:-}" \
-    ELITEBOOK_THERMAL_FORCE="${ELITEBOOK_THERMAL_FORCE:-}" \
-    ELITEBOOK_LOW_BATTERY_THRESHOLD="${ELITEBOOK_LOW_BATTERY_THRESHOLD:-}" \
-    ELITEBOOK_BATTERY_SAVER_MAX_FREQ_KHZ="${ELITEBOOK_BATTERY_SAVER_MAX_FREQ_KHZ:-}" \
-    ELITEBOOK_THERMAL_STATE_DIR="${ELITEBOOK_THERMAL_STATE_DIR:-}" \
-    ELITEBOOK_POWER_SUPPLY_DIR="${ELITEBOOK_POWER_SUPPLY_DIR:-}" \
-    ELITEBOOK_DMI_ID_DIR="${ELITEBOOK_DMI_ID_DIR:-}" \
-    ELITEBOOK_CPUINFO_PATH="${ELITEBOOK_CPUINFO_PATH:-}" \
-    ELITEBOOK_CPUFREQ_DIR="${ELITEBOOK_CPUFREQ_DIR:-}" \
-    ELITEBOOK_LOCKDOWN_PATH="${ELITEBOOK_LOCKDOWN_PATH:-}" \
-    ELITEBOOK_RYZENADJ_SEARCH_PATHS="${ELITEBOOK_RYZENADJ_SEARCH_PATHS:-}" \
-    ELITEBOOK_PROFILE_CONF="${ELITEBOOK_PROFILE_CONF:-}" \
-    ELITEBOOK_HWMON_DIR="${ELITEBOOK_HWMON_DIR:-}" \
-    "$0" "$@"
-fi
-
-SUDO=()
-
-acquire_dispatcher_lock() {
-  install -d -m 0755 "$STATE_DIR"
-  exec 9>"$LOCK_FILE"
-  flock -w 10 -x 9 || die "could not acquire dispatcher lock within 10s"
-}
-
-# An explicitly configured RYZENADJ that cannot be executed is a configuration
-# error and stays fatal. Not having RyzenAdj at all is not: the dispatcher
-# degrades to the sysfs controls below and records that it did.
-if [[ -n "${RYZENADJ:-}" && ! -x "${RYZENADJ}" ]]; then
-  die "RYZENADJ is set but is not executable: $RYZENADJ"
-fi
-RYZENADJ_BIN="$(find_ryzenadj || true)"
-acquire_dispatcher_lock
-
-profile_source="${ELITEBOOK_PROFILE_SOURCE:-}"
-if [[ -z "$profile_source" ]]; then
-  if [[ "$requested_profile" = "auto" ]]; then
-    profile_source="auto"
-  else
-    profile_source="manual"
-  fi
-fi
-
-current_source="$(current_value source)"
-auto_profile=""
-if [[ "$requested_profile" = "auto" ]]; then
-  auto_profile="$(detect_profile)"
-fi
-
-if [[ "$requested_profile" = "auto" && "$profile_source" = "system-auto" ]]; then
-  if [[ "$auto_profile" != "battery-saver" ]]; then
-    case "$current_source" in
-      manual)
-        echo "Manual EliteBook thermal profile override is active; system auto left it unchanged."
-        exit 0
-        ;;
-      steam-game-watcher)
-        echo "Steam game profile is active; system auto left it unchanged."
-        exit 0
-        ;;
-    esac
-  fi
-fi
-
-if [[ "$profile_source" = "steam-game-watcher" && "$current_source" = "manual" ]]; then
-  echo "Manual EliteBook thermal profile override is active; Steam watcher left it unchanged."
-  exit 0
-fi
-
-profile="$requested_profile"
-if [[ "$profile" = "auto" ]]; then
-  profile="$auto_profile"
-fi
-
-boost=on
-max_freq=uncapped
-tuned_profile=balanced
-
-# The stapm values below only take effect on units running with STT disabled.
-# On STT platforms (the 845 G8 included) the firmware rewrites the STAPM limit
-# with the fast limit within about a second of the write, so the sustained
-# envelope is governed by the slow limit. See docs/troubleshooting.md.
-case "$profile" in
-  ac)
-    epp="balance_power"
-    stapm=22000
-    fast=30000
-    slow=18000
-    apu=18000
-    tctl=90
-    ;;
-  performance)
-    epp="balance_performance"
-    stapm=22000
-    fast=30000
-    slow=18000
-    apu=18000
-    tctl=90
-    ;;
-  battery)
-    epp="balance_power"
-    stapm=18000
-    fast=30000
-    slow=15000
-    apu=15000
-    tctl=88
-    ;;
-  battery-saver)
-    epp="power"
-    stapm=10000
-    fast=15000
-    slow=8000
-    apu=8000
-    tctl=80
-    boost=off
-    max_freq="${ELITEBOOK_BATTERY_SAVER_MAX_FREQ_KHZ:-1800000}"
-    tuned_profile=powersave
-    is_uint "$max_freq" || die "ELITEBOOK_BATTERY_SAVER_MAX_FREQ_KHZ must be an integer kHz value"
-    ;;
-  gaming)
-    epp="balance_performance"
-    stapm=30000
-    fast=30000
-    slow=23000
-    apu=23000
-    tctl=92
-    ;;
-  cool)
-    epp="power"
-    stapm=16000
-    fast=22000
-    slow=12000
-    apu=12000
-    tctl=85
-    ;;
-  *)
-    usage
-    exit 2
-    ;;
-esac
-
-apply_profile_overrides "$profile"
-
-if command -v tuned-adm >/dev/null 2>&1; then
-  current_tuned_profile=""
-  if [[ -r /etc/tuned/active_profile ]]; then
-    current_tuned_profile="$(read_trimmed /etc/tuned/active_profile)"
-  fi
-
-  if [[ "$current_tuned_profile" != "$tuned_profile" ]]; then
-    if ! "${SUDO[@]}" timeout 10s tuned-adm profile "$tuned_profile" >/dev/null; then
-      echo "elitebook-thermal-profile: warning: tuned-adm did not apply '$tuned_profile'; continuing with direct CPU/SMU policy." >&2
-    fi
-  fi
-fi
-
-# The inner script receives values as positional parameters; keep it single
-# quoted so the outer shell does not expand sysfs paths or loop variables.
-# A failed or unsupported sysfs write must not abort the dispatcher under
-# set -e before the SMU limits are applied, so the inner script warns and
-# always exits 0.
-# shellcheck disable=SC2016
-"${SUDO[@]}" sh -c '
-cpufreq_dir="$1"
-boost_value="$2"
-max_freq="$3"
-
-if [ -w "$cpufreq_dir/boost" ]; then
-  echo "$boost_value" > "$cpufreq_dir/boost" 2>/dev/null ||
-    echo "elitebook-thermal-profile: warning: failed to write cpufreq boost" >&2
-fi
-
-for d in "$cpufreq_dir"/policy*; do
-  [ -d "$d" ] || continue
-  if [ "$max_freq" = "uncapped" ] && [ -w "$d/scaling_max_freq" ] && [ -r "$d/cpuinfo_max_freq" ]; then
-    cat "$d/cpuinfo_max_freq" > "$d/scaling_max_freq" 2>/dev/null ||
-      echo "elitebook-thermal-profile: warning: failed to restore $d/scaling_max_freq" >&2
-  elif [ "$max_freq" != "uncapped" ] && [ -w "$d/scaling_max_freq" ]; then
-    echo "$max_freq" > "$d/scaling_max_freq" 2>/dev/null ||
-      echo "elitebook-thermal-profile: warning: rejected max freq $max_freq for $d" >&2
-  fi
-done
-exit 0
-' sh "$CPUFREQ_DIR" "$([[ "$boost" = "on" ]] && echo 1 || echo 0)" "$max_freq"
-
-# EPP files only exist when the cpufreq driver runs in EPP mode (for example
-# amd-pstate-epp). On passive/guided drivers no policy is writable; warn and
-# continue so RyzenAdj limits and the state file are still applied.
-# shellcheck disable=SC2016
-"${SUDO[@]}" sh -c '
-cpufreq_dir="$1"
-epp="$2"
-applied=0
-for d in "$cpufreq_dir"/policy*; do
-  [ -w "$d/energy_performance_preference" ] || continue
-  if echo "$epp" > "$d/energy_performance_preference" 2>/dev/null; then
-    applied=$((applied + 1))
-  else
-    echo "elitebook-thermal-profile: warning: failed to write EPP $epp to $d" >&2
-  fi
-done
-if [ "$applied" -eq 0 ]; then
-  echo "elitebook-thermal-profile: warning: no cpufreq policy accepted EPP $epp; skipping EPP (cpufreq driver not in EPP mode?)" >&2
-fi
-exit 0
-' sh "$CPUFREQ_DIR" "$epp"
-
-# SMU limits are the part that needs RyzenAdj, and the part Secure Boot can
-# block. Everything above already applied. Record what happened instead of
-# aborting, so the state file and the panel indicator stay truthful and a
-# degraded run is visible rather than silent.
-smu_status=unavailable
-if [[ -n "$RYZENADJ_BIN" ]]; then
-  if "${SUDO[@]}" "$RYZENADJ_BIN" \
-    --stapm-limit="$stapm" \
-    --fast-limit="$fast" \
-    --slow-limit="$slow" \
-    --apu-slow-limit="$apu" \
-    --tctl-temp="$tctl"; then
-    smu_status=ok
-  else
-    lockdown="$(kernel_lockdown_mode)"
-    if [[ "$lockdown" != "none" && "$lockdown" != "unavailable" ]]; then
-      smu_status=blocked
-      echo "elitebook-thermal-profile: warning: RyzenAdj could not apply SMU limits; kernel lockdown is '$lockdown', which Secure Boot normally enables. CPU policy (EPP, boost, frequency) was applied. See docs/troubleshooting.md." >&2
-    else
-      smu_status=failed
-      echo "elitebook-thermal-profile: warning: RyzenAdj failed to apply SMU limits. CPU policy (EPP, boost, frequency) was applied." >&2
-    fi
-  fi
-else
-  echo "elitebook-thermal-profile: warning: RyzenAdj not found; applied CPU policy only (EPP, boost, frequency). Install ryzenadj for the SMU power limits, or set RYZENADJ=/path/to/ryzenadj." >&2
-fi
-
-write_state
-
-echo "EliteBook thermal profile '$profile' applied: boost $boost, max freq $max_freq, EPP $epp, FAST ${fast}mW, SLOW/APU ${slow}mW, Tctl ${tctl}C."
+  ELITEBOOK_BATTERY_SAVER_MAX_FREQ_KHZ=1800000""",
+        file=sys.stderr,
+    )
+
+
+def truthy(value: str | None) -> bool:
+    return (value or "") in ("1", "true", "TRUE", "yes", "YES", "on", "ON")
+
+
+def is_supported_product(product: str) -> bool:
+    return any(sub in product for sub in SUPPORTED_PRODUCT_SUBSTRINGS)
+
+
+def on_ac_power() -> bool:
+    return common.on_ac_power(POWER_SUPPLY_DIR)
+
+
+def battery_capacity() -> str | None:
+    value = common.battery_capacity(POWER_SUPPLY_DIR)
+    return None if value is None else str(value)
+
+
+def battery_is_low() -> bool:
+    threshold_raw = os.environ.get("ELITEBOOK_LOW_BATTERY_THRESHOLD", "20")
+    if not common.is_uint(threshold_raw):
+        die("ELITEBOOK_LOW_BATTERY_THRESHOLD must be an integer percentage")
+    if int(threshold_raw) <= 0:
+        return False
+    if on_ac_power():
+        return False
+    capacity = battery_capacity()
+    if capacity is None:
+        return False
+    return int(capacity) <= int(threshold_raw)
+
+
+def cpu_temperature_c() -> str | None:
+    value = common.cpu_temperature_c(HWMON_DIR)
+    return None if value is None else str(value)
+
+
+def read_key_value_file(path: Path) -> dict[str, str]:
+    return common.read_key_value_file(path)
+
+
+def current_value(key: str) -> str:
+    return read_key_value_file(STATE_FILE).get(key, "")
+
+
+def thermal_value(key: str) -> str:
+    return read_key_value_file(THERMAL_FILE).get(key, "")
+
+
+def print_thermal_record() -> None:
+    if not THERMAL_FILE.is_file():
+        try:
+            THERMAL_FILE.stat()
+        except OSError:
+            return
+    peak = thermal_value("peak_c")
+    target = thermal_value("target_c")
+    samples = thermal_value("samples")
+    over = thermal_value("over_target")
+    if not (common.is_uint(peak) and int(peak) > 0):
+        return
+    if common.is_uint(target) and int(target) > 0:
+        print(
+            f"Peak:         {peak} C since this profile was applied (target {target} C)"
+        )
+    else:
+        print(f"Peak:         {peak} C since this profile was applied")
+    if common.is_uint(samples) and common.is_uint(over) and int(samples) > 0:
+        percent = int(over) * 100 // int(samples)
+        if int(over) == 0:
+            print(f"Above target: never, over {samples} samples")
+        else:
+            print(f"Above target: {percent}% of {samples} samples")
+
+
+def print_status() -> None:
+    if not STATE_FILE.is_file():
+        try:
+            STATE_FILE.stat()
+        except OSError:
+            print(f"No profile has been applied yet (no state file at {STATE_FILE}).")
+            print("Apply one with: sudo elitebook-thermal-profile auto")
+            return
+    profile = current_value("profile")
+    source = current_value("source")
+    smu = current_value("smu")
+    epp = current_value("epp")
+    boost = current_value("boost")
+    max_freq = current_value("max_freq")
+    fast = current_value("fast_mw")
+    slow = current_value("slow_mw")
+    tctl = current_value("tctl_c")
+    updated = current_value("updated")
+
+    source_labels = {
+        "manual": "set manually",
+        "auto": "automatic (AC/battery)",
+        "system-auto": "system automation",
+        "steam-game-watcher": "Steam game detected",
+        "guard-fallback": "update guard fallback",
+        "": "unknown",
+    }
+    source_text = source_labels.get(source, source)
+
+    if max_freq == "uncapped" or max_freq == "":
+        freq_text = "uncapped"
+    else:
+        try:
+            freq_text = f"{int(max_freq) // 1000} MHz"
+        except ValueError:
+            freq_text = max_freq
+
+    print(f"Profile:      {profile or 'unknown'} ({source_text})")
+
+    if smu == "ok":
+        print("SMU limits:   applied")
+    elif smu == "unavailable":
+        print("SMU limits:   NOT applied - RyzenAdj is not installed")
+    elif smu == "blocked":
+        print("SMU limits:   NOT applied - blocked by kernel lockdown (Secure Boot)")
+    elif smu == "failed":
+        print("SMU limits:   NOT applied - RyzenAdj returned an error")
+    else:
+        print("SMU limits:   unknown (state written by an older version)")
+
+    print(
+        f"CPU policy:   EPP {epp or 'unknown'}, boost {boost or 'unknown'}, max frequency {freq_text}"
+    )
+
+    def watts(value: str) -> str:
+        try:
+            return str(int(value or "0") // 1000)
+        except ValueError:
+            return "0"
+
+    if smu == "ok":
+        print(
+            f"Power limits: sustained {watts(slow)} W, burst {watts(fast)} W, thermal target {tctl or '?'} C"
+        )
+    elif smu == "":
+        print(
+            f"Power limits: recorded {watts(slow)} W sustained, {watts(fast)} W burst, {tctl or '?'} C target"
+        )
+    else:
+        print(
+            f"Power limits: requested {watts(slow)} W sustained / {watts(fast)} W burst / {tctl or '?'} C, NOT in force"
+        )
+
+    battery = battery_capacity()
+    if battery:
+        if on_ac_power():
+            print(f"Battery:      {battery}% (on AC)")
+        else:
+            print(f"Battery:      {battery}% (on battery)")
+
+    temp = cpu_temperature_c()
+    if temp:
+        print(f"CPU temp:     {temp} C")
+
+    print_thermal_record()
+
+    print(f"Updated:      {updated or 'unknown'}")
+
+    if smu and smu != "ok":
+        print("")
+        print("This machine is running on CPU policy alone. See:")
+        print(
+            "  https://github.com/matteopasseri407/hp-elitebook-845-g8-ryzen-tuning/blob/main/docs/troubleshooting.md"
+        )
+
+
+def print_status_json() -> None:
+    """Machine-readable status for scripts and monitoring.
+
+    Same sources as print_status, stable sorted keys, always JSON on stdout
+    so `status --json | python3 -c ...` never has to parse human text.
+    """
+    try:
+        STATE_FILE.stat()
+    except OSError:
+        print(json.dumps({"error": f"no state file at {STATE_FILE}"}, sort_keys=True))
+        return
+    state = read_key_value_file(STATE_FILE)
+    thermal = read_key_value_file(THERMAL_FILE)
+    battery_raw = common.battery_capacity(POWER_SUPPLY_DIR)
+    temperature = common.cpu_temperature_c(HWMON_DIR)
+    payload: dict[str, typing.Any] = {
+        "tool": PROG,
+        "version": ELITEBOOK_VERSION,
+        "profile": state.get("profile", "unknown") or "unknown",
+        "source": state.get("source", "unknown") or "unknown",
+        "smu": state.get("smu", "unknown") or "unknown",
+        "epp": state.get("epp", "unknown") or "unknown",
+        "boost": state.get("boost", "unknown") or "unknown",
+        "max_freq": state.get("max_freq", "unknown") or "unknown",
+        "power_mw": {
+            "stapm": state.get("stapm_mw", "unknown") or "unknown",
+            "fast": state.get("fast_mw", "unknown") or "unknown",
+            "slow": state.get("slow_mw", "unknown") or "unknown",
+            "apu": state.get("apu_mw", "unknown") or "unknown",
+        },
+        "tctl_c": state.get("tctl_c", "unknown") or "unknown",
+        "battery_percent": battery_raw,
+        "on_ac_power": on_ac_power(),
+        "cpu_temp_c": temperature,
+        "thermal": {
+            "target_c": thermal.get("target_c"),
+            "peak_c": thermal.get("peak_c"),
+            "samples": thermal.get("samples"),
+            "over_target": thermal.get("over_target"),
+        },
+        "updated": state.get("updated", "unknown") or "unknown",
+    }
+    print(json.dumps(payload, sort_keys=True))
+
+
+def find_ryzenadj() -> str | None:
+    configured = os.environ.get("RYZENADJ", "")
+    search_raw = os.environ.get(
+        "ELITEBOOK_RYZENADJ_SEARCH_PATHS",
+        "/usr/local/sbin/ryzenadj /usr/local/bin/ryzenadj /usr/bin/ryzenadj",
+    )
+    found = common.find_ryzenadj(configured, search_raw.split())
+    if configured and found is None:
+        die(f"RYZENADJ is set but is not executable: {configured}")
+    return found
+
+
+def kernel_lockdown_mode() -> str:
+    return common.kernel_lockdown_mode(LOCKDOWN_PATH)
+
+
+def detect_cpu_model() -> str:
+    try:
+        text = CPUINFO_PATH.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return ""
+    for line in text.splitlines():
+        if "model name" not in line:
+            continue
+        if ":" not in line:
+            continue
+        _, _, after = line.partition(":")
+        return after.lstrip(" \t")
+    return ""
+
+
+def assert_supported_hardware() -> None:
+    global DETECTED_PRODUCT, DETECTED_CPU
+    if truthy(os.environ.get("ELITEBOOK_THERMAL_FORCE", "")):
+        return
+    vendor = common.read_trimmed(DMI_ID_DIR / "sys_vendor")
+    product = common.read_trimmed(DMI_ID_DIR / "product_name")
+    cpu = detect_cpu_model()
+    DETECTED_PRODUCT = product
+    DETECTED_CPU = cpu
+    if vendor not in ("HP", "Hewlett-Packard"):
+        die(
+            f"unsupported vendor '{vendor}' (set ELITEBOOK_THERMAL_FORCE=1 to override)"
+        )
+    if not is_supported_product(product):
+        die(
+            f"unsupported product '{product}' (set ELITEBOOK_THERMAL_FORCE=1 to override)"
+        )
+    if CEZANNE_RE.search(cpu):
+        return
+    if REMBRANDT_RE.search(cpu):
+        die(
+            f"known HP AMD Rembrandt hardware '{product}' / '{cpu}' is not enabled yet "
+            "because these SMU limits are only validated on Cezanne "
+            "(set ELITEBOOK_THERMAL_FORCE=1 to override after reviewing profile values)"
+        )
+    die(
+        f"unsupported CPU '{cpu}' (validated Cezanne CPUs: Ryzen PRO 5650U, 5750U, 5850U; "
+        "set ELITEBOOK_THERMAL_FORCE=1 to override)"
+    )
+
+
+def detect_profile() -> str:
+    if on_ac_power():
+        return "ac"
+    if battery_is_low():
+        return "battery-saver"
+    return "battery"
+
+
+def profile_conf_value(key: str) -> tuple[str | None, int]:
+    """Value and 1-based line number of the last matching key, if any."""
+    try:
+        text = PROFILE_CONF.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return None, 0
+    pattern = re.compile(rf"^\s*{re.escape(key)}\s*=\s*(.*)$")
+    last: str | None = None
+    last_line = 0
+    for lineno, line in enumerate(text.splitlines(), 1):
+        match = pattern.match(line)
+        if match:
+            last = match.group(1)
+            last_line = lineno
+    if last is None:
+        return None, 0
+    last = last.split("#", 1)[0]
+    last = re.sub(r"\s+", "", last)
+    if not last:
+        return None, 0
+    return last, last_line
+
+
+def override_uint(key: str, minimum: int, maximum: int, current: str) -> str:
+    value, lineno = profile_conf_value(key)
+    if value is None:
+        return current
+    if not common.is_uint(value):
+        warn(
+            f"{PROFILE_CONF} line {lineno}: {key}='{value}' is not an integer; "
+            f"keeping {current}"
+        )
+        return current
+    number = int(value)
+    if number < minimum or number > maximum:
+        warn(
+            f"{PROFILE_CONF} line {lineno}: {key}={value} is outside the safe "
+            f"range {minimum}-{maximum}; keeping {current}"
+        )
+        return current
+    return value
+
+
+def override_epp(key: str, current: str) -> str:
+    value, lineno = profile_conf_value(key)
+    if value is None:
+        return current
+    if value in VALID_EPPS:
+        return value
+    warn(
+        f"{PROFILE_CONF} line {lineno}: {key}='{value}' is not a valid EPP "
+        f"hint; keeping {current}"
+    )
+    return current
+
+
+def acquire_dispatcher_lock() -> typing.TextIO:
+    try:
+        return common.acquire_dispatcher_lock(STATE_DIR, 10)
+    except TimeoutError:
+        die("could not acquire dispatcher lock within 10s")
+
+
+def apply_tuned_profile(tuned_profile: str) -> None:
+    if shutil.which("tuned-adm") is None:
+        return
+    current = ""
+    try:
+        current = (
+            Path("/etc/tuned/active_profile")
+            .read_text(encoding="utf-8", errors="ignore")
+            .strip()
+            .replace("\x00", "")
+        )
+    except OSError:
+        current = ""
+    if current == tuned_profile:
+        return
+    try:
+        result = subprocess.run(
+            ["tuned-adm", "profile", tuned_profile],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=10,
+            check=False,
+        )
+        ok = result.returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        ok = False
+    if not ok:
+        warn(
+            f"tuned-adm did not apply '{tuned_profile}'; continuing with direct CPU/SMU policy."
+        )
+
+
+def apply_boost_and_freq(boost: str, max_freq: str) -> None:
+    # Writes are skipped when the file already holds the desired value: udev
+    # replays this dispatcher on every battery-percent event, and rewriting
+    # identical sysfs values each time is pure churn.
+    boost_value = "1" if boost == "on" else "0"
+    boost_path = CPUFREQ_DIR / "boost"
+    if boost_path.exists() and not common.sysfs_value_matches(boost_path, boost_value):
+        try:
+            boost_path.write_text(boost_value + "\n", encoding="utf-8")
+        except OSError:
+            warn("failed to write cpufreq boost")
+    try:
+        policies = sorted(CPUFREQ_DIR.glob("policy*"))
+    except OSError:
+        return
+    for policy in policies:
+        try:
+            if not policy.is_dir():
+                continue
+        except OSError:
+            continue
+        scaling_max = policy / "scaling_max_freq"
+        cpuinfo_max = policy / "cpuinfo_max_freq"
+        if max_freq == "uncapped":
+            try:
+                writable = scaling_max.exists()
+                readable = cpuinfo_max.is_file()
+            except OSError:
+                continue
+            if writable and readable:
+                try:
+                    value = cpuinfo_max.read_text(encoding="utf-8")
+                except OSError:
+                    continue
+                if common.sysfs_value_matches(scaling_max, value.strip()):
+                    continue
+                try:
+                    scaling_max.write_text(value, encoding="utf-8")
+                except OSError:
+                    warn(f"failed to restore {policy}/scaling_max_freq")
+        else:
+            try:
+                if not scaling_max.exists():
+                    continue
+            except OSError:
+                continue
+            if common.sysfs_value_matches(scaling_max, max_freq):
+                continue
+            try:
+                scaling_max.write_text(max_freq + "\n", encoding="utf-8")
+            except OSError:
+                warn(f"rejected max freq {max_freq} for {policy}")
+
+
+def apply_epp(epp: str) -> None:
+    try:
+        policies = sorted(CPUFREQ_DIR.glob("policy*"))
+    except OSError:
+        policies = []
+    applied = 0
+    for policy in policies:
+        epp_path = policy / "energy_performance_preference"
+        try:
+            exists = epp_path.exists()
+        except OSError:
+            continue
+        if not exists:
+            continue
+        if common.sysfs_value_matches(epp_path, epp):
+            applied += 1
+            continue
+        try:
+            epp_path.write_text(epp + "\n", encoding="utf-8")
+            applied += 1
+        except OSError:
+            warn(f"failed to write EPP {epp} to {policy}")
+    if applied == 0:
+        warn(
+            f"no cpufreq policy accepted EPP {epp}; skipping EPP (cpufreq driver not in EPP mode?)"
+        )
+
+
+def write_state(
+    profile: str,
+    profile_source: str,
+    epp: str,
+    smu_status: str,
+    stapm: str,
+    fast: str,
+    slow: str,
+    apu: str,
+    tctl: str,
+    boost: str,
+    max_freq: str,
+) -> None:
+    battery_raw = common.battery_capacity(POWER_SUPPLY_DIR)
+    battery_percent = str(battery_raw) if battery_raw is not None else "unknown"
+    threshold = os.environ.get("ELITEBOOK_LOW_BATTERY_THRESHOLD", "20") or "20"
+    updated = datetime.now().astimezone().isoformat(timespec="seconds")
+    STATE_DIR.mkdir(mode=0o755, parents=True, exist_ok=True)
+    tmp = STATE_DIR / f"current.tmp.{os.getpid()}"
+    content = (
+        f"profile={profile}\n"
+        f"source={profile_source}\n"
+        f"epp={epp}\n"
+        f"smu={smu_status}\n"
+        f"stapm_mw={stapm}\n"
+        f"fast_mw={fast}\n"
+        f"slow_mw={slow}\n"
+        f"apu_mw={apu}\n"
+        f"tctl_c={tctl}\n"
+        f"boost={boost}\n"
+        f"max_freq={max_freq}\n"
+        f"battery_percent={battery_percent}\n"
+        f"low_battery_threshold_percent={threshold}\n"
+        f"updated={updated}\n"
+    )
+    tmp.write_text(content, encoding="utf-8")
+    try:
+        os.chmod(tmp, 0o644)
+    except OSError:
+        pass
+    os.replace(tmp, STATE_FILE)
+
+
+def reexec_via_sudo(argv: list[str]) -> typing.NoReturn:
+    prog = argv[0] if argv else PROG
+    if "/" in prog and not os.path.isabs(prog):
+        prog = os.path.abspath(prog)
+    # Through `env` rather than bare VAR= assignments so the preserved values
+    # survive sudo's env_reset instead of being filtered before the dispatcher
+    # even starts. Still interactive: no -n, a manual run may prompt.
+    cmd = ["sudo", "env"]
+    for key in SUDO_PRESERVE_ENV:
+        cmd.append(f"{key}={os.environ.get(key, '')}")
+    cmd.append(prog)
+    cmd.extend(argv[1:])
+    try:
+        os.execvp("sudo", cmd)
+    except OSError:
+        die("sudo is required to apply a profile but was not found; re-run as root")
+    raise SystemExit(1)  # pragma: no cover
+
+
+def main(argv: list[str]) -> int:
+    requested = argv[0] if argv else "auto"
+
+    if requested in ("--help", "-h"):
+        usage()
+        return 0
+    if requested == "--version":
+        print(f"{PROG} {ELITEBOOK_VERSION}")
+        return 0
+    if requested == "status":
+        if len(argv) > 1 and argv[1] == "--json":
+            print_status_json()
+        else:
+            print_status()
+        return 0
+
+    assert_supported_hardware()
+
+    if requested == "--check-hardware":
+        if truthy(os.environ.get("ELITEBOOK_THERMAL_FORCE", "")):
+            print("Hardware guard skipped: ELITEBOOK_THERMAL_FORCE is set.")
+        else:
+            print(
+                f"Supported hardware detected: {DETECTED_PRODUCT or 'unknown product'} / "
+                f"{DETECTED_CPU or 'unknown CPU'}."
+            )
+        return 0
+
+    if os.geteuid() != 0:
+        reexec_via_sudo(sys.argv)
+
+    # An explicitly configured RYZENADJ that cannot be executed is fatal;
+    # find_ryzenadj reports that itself.
+    ryzenadj_bin = find_ryzenadj()
+
+    lock_file = acquire_dispatcher_lock()
+    try:
+        profile_source = os.environ.get("ELITEBOOK_PROFILE_SOURCE", "")
+        if not profile_source:
+            profile_source = "auto" if requested == "auto" else "manual"
+
+        current_source = current_value("source")
+        auto_profile = ""
+        if requested == "auto":
+            auto_profile = detect_profile()
+
+        if requested == "auto" and profile_source == "system-auto":
+            if auto_profile != "battery-saver":
+                if current_source == "manual":
+                    print(
+                        "Manual EliteBook thermal profile override is active; system auto left it unchanged."
+                    )
+                    return 0
+                if current_source == "steam-game-watcher":
+                    print(
+                        "Steam game profile is active; system auto left it unchanged."
+                    )
+                    return 0
+
+        if profile_source == "steam-game-watcher" and current_source == "manual":
+            print(
+                "Manual EliteBook thermal profile override is active; Steam watcher left it unchanged."
+            )
+            return 0
+
+        profile = auto_profile if requested == "auto" else requested
+
+        builtin = BUILTIN_PROFILES.get(profile)
+        if builtin is None:
+            usage()
+            return 2
+        (
+            epp,
+            stapm_i,
+            fast_i,
+            slow_i,
+            apu_i,
+            tctl_i,
+            boost,
+            max_freq_default,
+            tuned_profile,
+        ) = builtin
+        stapm, fast, slow, apu, tctl = (
+            str(stapm_i),
+            str(fast_i),
+            str(slow_i),
+            str(apu_i),
+            str(tctl_i),
+        )
+        if max_freq_default == "BATTERY_SAVER_ENV":
+            max_freq = (
+                os.environ.get("ELITEBOOK_BATTERY_SAVER_MAX_FREQ_KHZ", "1800000")
+                or "1800000"
+            )
+            if not common.is_uint(max_freq):
+                die("ELITEBOOK_BATTERY_SAVER_MAX_FREQ_KHZ must be an integer kHz value")
+        elif max_freq_default is None:
+            max_freq = "uncapped"
+        else:
+            max_freq = max_freq_default
+
+        # Per-profile overrides: AC_SLOW_MW, COOL_TCTL_C, BATTERY_SAVER_EPP...
+        prefix = profile.upper().replace("-", "_")
+        stapm = override_uint(f"{prefix}_STAPM_MW", 4000, 45000, stapm)
+        fast = override_uint(f"{prefix}_FAST_MW", 4000, 45000, fast)
+        slow = override_uint(f"{prefix}_SLOW_MW", 4000, 45000, slow)
+        apu = override_uint(f"{prefix}_APU_MW", 4000, 45000, apu)
+        tctl = override_uint(f"{prefix}_TCTL_C", 60, 100, tctl)
+        epp = override_epp(f"{prefix}_EPP", epp)
+
+        apply_tuned_profile(tuned_profile)
+        apply_boost_and_freq(boost, max_freq)
+        apply_epp(epp)
+
+        smu_status = "unavailable"
+        if ryzenadj_bin:
+            try:
+                result = subprocess.run(
+                    [
+                        ryzenadj_bin,
+                        f"--stapm-limit={stapm}",
+                        f"--fast-limit={fast}",
+                        f"--slow-limit={slow}",
+                        f"--apu-slow-limit={apu}",
+                        f"--tctl-temp={tctl}",
+                    ],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                )
+                ok = result.returncode == 0
+            except OSError:
+                ok = False
+            if ok:
+                smu_status = "ok"
+            else:
+                lockdown = kernel_lockdown_mode()
+                if lockdown != "none" and lockdown != "unavailable":
+                    smu_status = "blocked"
+                    warn(
+                        f"RyzenAdj could not apply SMU limits; kernel lockdown is '{lockdown}', "
+                        "which Secure Boot normally enables. CPU policy (EPP, boost, frequency) "
+                        "was applied. See docs/troubleshooting.md."
+                    )
+                else:
+                    smu_status = "failed"
+                    warn(
+                        "RyzenAdj failed to apply SMU limits. CPU policy (EPP, boost, frequency) was applied."
+                    )
+        else:
+            warn(
+                "RyzenAdj not found; applied CPU policy only (EPP, boost, frequency). "
+                "Install ryzenadj for the SMU power limits, or set RYZENADJ=/path/to/ryzenadj."
+            )
+
+        write_state(
+            profile,
+            profile_source,
+            epp,
+            smu_status,
+            stapm,
+            fast,
+            slow,
+            apu,
+            tctl,
+            boost,
+            max_freq,
+        )
+
+        print(
+            f"EliteBook thermal profile '{profile}' applied: boost {boost}, max freq {max_freq}, "
+            f"EPP {epp}, FAST {fast}mW, SLOW/APU {slow}mW, Tctl {tctl}C."
+        )
+        return 0
+    finally:
+        # Closing the lock file releases the flock; no explicit unlock dance.
+        try:
+            lock_file.close()
+        except OSError:
+            pass
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

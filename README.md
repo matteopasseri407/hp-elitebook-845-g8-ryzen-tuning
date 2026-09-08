@@ -406,7 +406,14 @@ hardware and the current package temperature:
 elitebook-thermal-profile status
 ```
 
-That needs no root. The raw state files are also readable directly:
+That needs no root. Scripts should use the JSON form instead of parsing
+the human text:
+
+```bash
+elitebook-thermal-profile status --json
+```
+
+The raw state files are also readable directly:
 
 ```bash
 cat /run/elitebook-thermal-profile/current

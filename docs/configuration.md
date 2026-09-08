@@ -58,7 +58,7 @@ A value that is not a number, or outside its range, is reported on stderr and
 the built-in default is used instead:
 
 ```
-elitebook-thermal-profile: warning: /etc/elitebook-thermal-profile/profiles.conf: AC_SLOW_MW=95000 is outside the safe range 4000-45000; keeping 18000
+elitebook-thermal-profile: warning: /etc/elitebook-thermal-profile/profiles.conf line 12: AC_SLOW_MW=95000 is outside the safe range 4000-45000; keeping 18000
 ```
 
 The run continues. A typo in this file must never leave the machine untuned,
@@ -77,7 +77,8 @@ elitebook-thermal-profile status        # confirm what is actually in force
 
 `status` needs no root. It prints the active profile, whether the SMU limits
 really reached the hardware, the CPU policy, the battery state, and the current
-package temperature.
+package temperature. Scripts should use `status --json` instead of parsing
+that text.
 
 ```
 Profile:      ac (system automation)

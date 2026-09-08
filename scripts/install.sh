@@ -509,6 +509,7 @@ check_hardware() {
 
 install_profile_files() {
   install -D -m 0755 "$REPO_DIR/src/elitebook-thermal-profile" /usr/local/sbin/elitebook-thermal-profile
+  install -D -m 0644 "$REPO_DIR/src/elitebook_common.py" /usr/local/sbin/elitebook_common.py
   install -D -m 0644 "$REPO_DIR/systemd/elitebook-thermal-profile.service" /etc/systemd/system/elitebook-thermal-profile.service
   install -D -m 0644 "$REPO_DIR/udev/90-elitebook-thermal-profile.rules" /etc/udev/rules.d/90-elitebook-thermal-profile.rules
   install -D -m 0755 "$REPO_DIR/system-sleep/elitebook-thermal-profile" /etc/systemd/system-sleep/elitebook-thermal-profile
@@ -769,6 +770,7 @@ uninstall_profiles() {
   rm -f /usr/local/sbin/elitebook-steam-game-watcher
   rm -f /usr/local/sbin/elitebook-idle-watcher
   rm -f /usr/local/sbin/elitebook-thermal-profile
+  rm -f /usr/local/sbin/elitebook_common.py
   rm -f /usr/local/sbin/elitebook-power-guard
   rm -f /run/elitebook-thermal-profile/current
   rm -f /run/elitebook-thermal-profile/steam-game-watcher

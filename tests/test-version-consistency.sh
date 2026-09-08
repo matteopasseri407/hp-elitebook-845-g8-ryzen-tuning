@@ -16,7 +16,7 @@ fail() {
   failures=$((failures + 1))
 }
 
-script_version="$(sed -n 's/^ELITEBOOK_VERSION="\(.*\)"$/\1/p' "$REPO_DIR/src/elitebook-thermal-profile")"
+script_version="$(sed -n 's/^ELITEBOOK_VERSION[[:space:]]*=[[:space:]]*"\(.*\)"$/\1/p' "$REPO_DIR/src/elitebook-thermal-profile")"
 spec_version="$(sed -n 's/^Version:[[:space:]]*//p' "$REPO_DIR/packaging/rpm/elitebook-thermal-profile.spec" | head -n 1)"
 deb_version="$(sed -n '1s/^elitebook-thermal-profile (\([^)]*\)).*/\1/p' "$REPO_DIR/packaging/debian/changelog")"
 reported_version="$("$REPO_DIR/src/elitebook-thermal-profile" --version | awk '{print $2}')"

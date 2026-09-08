@@ -1,3 +1,14 @@
+elitebook-thermal-profile (0.8.0) unstable; urgency=medium
+
+  * Rewrite the dispatcher from bash to stdlib-only Python with identical
+    CLI, state files and messages; add status --json for scripts.
+  * Skip sysfs writes when the value is already in force; SMU limits are
+    still reapplied every run so firmware resets keep healing.
+  * Share sysfs helpers between dispatcher and watchers in one module.
+  * Name the config file line in refused profile override warnings.
+
+  -- Matteo Passeri <matteopasseri407@users.noreply.github.com>  Tue, 08 Sep 2026 17:23:00 +0200
+
 elitebook-thermal-profile (0.7.0) unstable; urgency=medium
 
   * Record package temperature against the active profile target and report it

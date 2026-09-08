@@ -65,7 +65,7 @@ jobs:
         run: tests/test-thermal-report.sh
 
   ruff:
-    name: Ruff (Python watchers)
+    name: Ruff (Python)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -77,12 +77,16 @@ jobs:
       - name: Lint
         run: |
           ruff check \
+            src/elitebook-thermal-profile \
+            src/elitebook_common.py \
             src/elitebook-idle-watcher \
             src/elitebook-steam-game-watcher \
             tests
       - name: Format check
         run: |
           ruff format --check \
+            src/elitebook-thermal-profile \
+            src/elitebook_common.py \
             src/elitebook-idle-watcher \
             src/elitebook-steam-game-watcher \
             tests
@@ -97,16 +101,20 @@ jobs:
           python-version: "3.12"
       - name: Install test tools
         run: pip install --no-cache-dir mypy==1.18.2 pytest==8.4.2
-      - name: Compile watchers
+      - name: Compile Python sources
         run: |
           python3 -m py_compile \
+            src/elitebook-thermal-profile \
+            src/elitebook_common.py \
             src/elitebook-idle-watcher \
             src/elitebook-steam-game-watcher \
             tests/test_idle_watcher.py \
             tests/test_steam_game_watcher.py
-      - name: Typecheck watchers
+      - name: Typecheck Python sources
         run: |
           mypy --strict --scripts-are-modules \
+            src/elitebook-thermal-profile \
+            src/elitebook_common.py \
             src/elitebook-idle-watcher \
             src/elitebook-steam-game-watcher
       - name: Run unit tests

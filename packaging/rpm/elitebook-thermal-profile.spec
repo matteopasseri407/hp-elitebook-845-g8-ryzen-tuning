@@ -1,5 +1,5 @@
 Name:           elitebook-thermal-profile
-Version:        0.7.0
+Version:        0.8.0
 Release:        1%{?dist}
 Summary:        Thermal and power profiles for HP AMD Cezanne laptops
 
@@ -60,12 +60,14 @@ daily UI.
 # Scripts and GNOME Shell files do not need a build step.
 
 %check
-bash -n src/elitebook-thermal-profile src/elitebook-power-guard src/elitebook-hibernate-preflight system-sleep/elitebook-thermal-profile
-python3 -m py_compile src/elitebook-idle-watcher src/elitebook-steam-game-watcher
+bash -n src/elitebook-power-guard src/elitebook-hibernate-preflight system-sleep/elitebook-thermal-profile
+python3 -m py_compile src/elitebook-thermal-profile src/elitebook_common.py src/elitebook-idle-watcher src/elitebook-steam-game-watcher
 
 %install
 install -Dm0755 src/elitebook-thermal-profile \
   %{buildroot}%{_bindir}/elitebook-thermal-profile
+install -Dm0644 src/elitebook_common.py \
+  %{buildroot}%{_bindir}/elitebook_common.py
 install -Dm0755 src/elitebook-idle-watcher \
   %{buildroot}%{_bindir}/elitebook-idle-watcher
 install -Dm0755 src/elitebook-power-guard \
@@ -166,6 +168,7 @@ fi
 %dir %{_sysconfdir}/%{name}
 %config(noreplace) %{_sysconfdir}/%{name}/profiles.conf
 %{_bindir}/elitebook-thermal-profile
+%{_bindir}/elitebook_common.py
 %{_bindir}/elitebook-idle-watcher
 %{_bindir}/elitebook-power-guard
 %{_bindir}/elitebook-steam-game-watcher
@@ -184,6 +187,14 @@ fi
 %{_datadir}/gnome-shell/extensions/%{extension_uuid}/
 
 %changelog
+* Tue Sep 08 2026 Matteo Passeri <matteopasseri407@users.noreply.github.com> - 0.8.0-1
+- Rewrite the dispatcher from bash to stdlib-only Python with identical CLI,
+  state files and messages; add status --json for scripts
+- Skip sysfs writes when the value is already in force; SMU limits are still
+  reapplied every run so firmware resets keep healing
+- Share sysfs helpers between dispatcher and watchers in one module
+- Name the config file line in refused profile override warnings
+
 * Wed Jul 29 2026 Matteo Passeri <matteopasseri407@users.noreply.github.com> - 0.7.0-1
 - Record the package temperature against the active profile's thermal target
   while the idle watcher runs, reset on every profile change

@@ -7,6 +7,10 @@ import sys
 import time
 from pathlib import Path
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+import elitebook_common as common  # noqa: E402
+
 PROFILE_SCRIPT = Path(
     os.environ.get(
         "ELITEBOOK_PROFILE_SCRIPT", "/usr/local/sbin/elitebook-thermal-profile"
@@ -47,38 +51,13 @@ IGNORED_COMMANDS = {
 
 
 def on_ac_power() -> bool:
-    ac_online = POWER_SUPPLY_DIR / "AC" / "online"
-    try:
-        return ac_online.read_text(encoding="utf-8").strip() == "1"
-    except OSError:
-        pass
-
-    try:
-        supplies = list(POWER_SUPPLY_DIR.glob("*"))
-    except OSError:
-        return True
-
-    for supply in supplies:
-        try:
-            if (supply / "type").read_text(encoding="utf-8").strip() != "Mains":
-                continue
-            online = (supply / "online").read_text(encoding="utf-8").strip()
-            return online == "1"
-        except OSError:
-            continue
-
-    return True
+    # No power-supply information (container, chroot, stripped sysfs) means
+    # the long battery interval would be wrong; assume AC instead.
+    return common.on_ac_power(POWER_SUPPLY_DIR, default_when_unknown=True)
 
 
 def battery_capacity() -> int | None:
-    for supply in POWER_SUPPLY_DIR.glob("*"):
-        try:
-            if (supply / "type").read_text(encoding="utf-8").strip() != "Battery":
-                continue
-            return int((supply / "capacity").read_text(encoding="utf-8").strip())
-        except (OSError, ValueError):
-            continue
-    return None
+    return common.battery_capacity(POWER_SUPPLY_DIR)
 
 
 def battery_is_low() -> bool:
