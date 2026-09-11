@@ -468,28 +468,9 @@ def apply_sysfs_fallback(
 
         log(f"applying {label} direct sysfs fallback")
 
-        boost_file = cpufreq_dir / "boost"
-        if os.access(boost_file, os.W_OK):
-            try:
-                boost_file.write_text(f"{boost}\n", encoding="utf-8")
-            except OSError:
-                pass
-
-        for policy in sorted(cpufreq_dir.glob("policy*")):
-            if not policy.is_dir():
-                continue
-            max_freq_file = policy / "scaling_max_freq"
-            if os.access(max_freq_file, os.W_OK):
-                try:
-                    max_freq_file.write_text(f"{max_freq}\n", encoding="utf-8")
-                except OSError:
-                    pass
-            epp_file = policy / "energy_performance_preference"
-            if os.access(epp_file, os.W_OK):
-                try:
-                    epp_file.write_text(f"{epp}\n", encoding="utf-8")
-                except OSError:
-                    pass
+        common.apply_cpu_policy(
+            cpufreq_dir, epp, "on" if boost == 1 else "off", str(max_freq)
+        )
 
         now = datetime.now().astimezone().isoformat(timespec="seconds")
         content = (

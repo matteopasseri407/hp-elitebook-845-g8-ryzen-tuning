@@ -4,7 +4,8 @@ elitebook-thermal-profile (0.8.0) unstable; urgency=medium
     CLI, state files and messages; add status --json for scripts.
   * Skip sysfs writes when the value is already in force; SMU limits are
     still reapplied every run so firmware resets keep healing.
-  * Share sysfs helpers between dispatcher and watchers in one module.
+  * Share sysfs helpers and CPU policy application among dispatcher,
+    watchers and guard in one module.
   * Rewrite the update guard and the hibernate preflight from bash to
     Python as well; the hibernate config is parsed instead of sourced as
     root shell, and the system-sleep hook now runs Python too.

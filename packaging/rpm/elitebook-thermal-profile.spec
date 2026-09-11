@@ -197,7 +197,8 @@ fi
   state files and messages; add status --json for scripts
 - Skip sysfs writes when the value is already in force; SMU limits are still
   reapplied every run so firmware resets keep healing
-- Share sysfs helpers between dispatcher and watchers in one module
+- Share sysfs helpers and CPU policy application among dispatcher,
+  watchers and guard in one module
 - Rewrite elitebook-power-guard and elitebook-hibernate-preflight from bash
   to the same stdlib-only Python; parse the hibernate config instead of
   sourcing it as root shell, and convert the system-sleep hook to Python

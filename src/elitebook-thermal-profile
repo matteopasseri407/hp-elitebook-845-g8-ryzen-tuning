@@ -567,88 +567,6 @@ def apply_tuned_profile(tuned_profile: str) -> None:
         )
 
 
-def apply_boost_and_freq(boost: str, max_freq: str) -> None:
-    # Writes are skipped when the file already holds the desired value: udev
-    # replays this dispatcher on every battery-percent event, and rewriting
-    # identical sysfs values each time is pure churn.
-    boost_value = "1" if boost == "on" else "0"
-    boost_path = CPUFREQ_DIR / "boost"
-    if boost_path.exists() and not common.sysfs_value_matches(boost_path, boost_value):
-        try:
-            boost_path.write_text(boost_value + "\n", encoding="utf-8")
-        except OSError:
-            warn("failed to write cpufreq boost")
-    try:
-        policies = sorted(CPUFREQ_DIR.glob("policy*"))
-    except OSError:
-        return
-    for policy in policies:
-        try:
-            if not policy.is_dir():
-                continue
-        except OSError:
-            continue
-        scaling_max = policy / "scaling_max_freq"
-        cpuinfo_max = policy / "cpuinfo_max_freq"
-        if max_freq == "uncapped":
-            try:
-                writable = scaling_max.exists()
-                readable = cpuinfo_max.is_file()
-            except OSError:
-                continue
-            if writable and readable:
-                try:
-                    value = cpuinfo_max.read_text(encoding="utf-8")
-                except OSError:
-                    continue
-                if common.sysfs_value_matches(scaling_max, value.strip()):
-                    continue
-                try:
-                    scaling_max.write_text(value, encoding="utf-8")
-                except OSError:
-                    warn(f"failed to restore {policy}/scaling_max_freq")
-        else:
-            try:
-                if not scaling_max.exists():
-                    continue
-            except OSError:
-                continue
-            if common.sysfs_value_matches(scaling_max, max_freq):
-                continue
-            try:
-                scaling_max.write_text(max_freq + "\n", encoding="utf-8")
-            except OSError:
-                warn(f"rejected max freq {max_freq} for {policy}")
-
-
-def apply_epp(epp: str) -> None:
-    try:
-        policies = sorted(CPUFREQ_DIR.glob("policy*"))
-    except OSError:
-        policies = []
-    applied = 0
-    for policy in policies:
-        epp_path = policy / "energy_performance_preference"
-        try:
-            exists = epp_path.exists()
-        except OSError:
-            continue
-        if not exists:
-            continue
-        if common.sysfs_value_matches(epp_path, epp):
-            applied += 1
-            continue
-        try:
-            epp_path.write_text(epp + "\n", encoding="utf-8")
-            applied += 1
-        except OSError:
-            warn(f"failed to write EPP {epp} to {policy}")
-    if applied == 0:
-        warn(
-            f"no cpufreq policy accepted EPP {epp}; skipping EPP (cpufreq driver not in EPP mode?)"
-        )
-
-
 def write_state(
     profile: str,
     profile_source: str,
@@ -822,28 +740,14 @@ def main(argv: list[str]) -> int:
         epp = override_epp(f"{prefix}_EPP", epp)
 
         apply_tuned_profile(tuned_profile)
-        apply_boost_and_freq(boost, max_freq)
-        apply_epp(epp)
+        for failure in common.apply_cpu_policy(
+            CPUFREQ_DIR, epp, boost, max_freq, skip_unchanged=True
+        ):
+            warn(failure)
 
         smu_status = "unavailable"
         if ryzenadj_bin:
-            try:
-                result = subprocess.run(
-                    [
-                        ryzenadj_bin,
-                        f"--stapm-limit={stapm}",
-                        f"--fast-limit={fast}",
-                        f"--slow-limit={slow}",
-                        f"--apu-slow-limit={apu}",
-                        f"--tctl-temp={tctl}",
-                    ],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    check=False,
-                )
-                ok = result.returncode == 0
-            except OSError:
-                ok = False
+            ok = common.apply_smu_limits(ryzenadj_bin, stapm, fast, slow, apu, tctl)
             if ok:
                 smu_status = "ok"
             else:

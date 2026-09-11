@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
 import os
-import subprocess
 import sys
 import time
 from collections.abc import Iterator
@@ -19,6 +18,7 @@ PROFILE_STATE = STATE_DIR / "current"
 IDLE_STATE = STATE_DIR / "idle-watcher"
 THERMAL_STATE = STATE_DIR / "thermal"
 HWMON_DIR = Path(os.environ.get("ELITEBOOK_HWMON_DIR", "/sys/class/hwmon"))
+CPUFREQ_DIR = Path("/sys/devices/system/cpu/cpufreq")
 # How many samples between routine writes of the thermal record. A new peak is
 # always written immediately; this only bounds how stale the rest can get.
 THERMAL_WRITE_SAMPLES = int(os.environ.get("ELITEBOOK_THERMAL_WRITE_SAMPLES", "60"))
@@ -265,36 +265,8 @@ def load1() -> float:
         return 0.0
 
 
-def write_sysfs(path: Path, value: str) -> None:
-    try:
-        path.write_text(value, encoding="utf-8")
-    except OSError:
-        pass
-
-
 def set_cpu_policy(epp: str, boost: str, max_freq: str) -> None:
-    boost_path = Path("/sys/devices/system/cpu/cpufreq/boost")
-    if boost_path.exists():
-        write_sysfs(boost_path, "1\n" if boost == "on" else "0\n")
-
-    for policy in sorted(Path("/sys/devices/system/cpu/cpufreq").glob("policy*")):
-        epp_path = policy / "energy_performance_preference"
-        if epp_path.exists():
-            write_sysfs(epp_path, f"{epp}\n")
-
-        max_path = policy / "scaling_max_freq"
-        if not max_path.exists():
-            continue
-
-        if max_freq == "uncapped":
-            cpuinfo_max = policy / "cpuinfo_max_freq"
-            try:
-                max_freq_value = cpuinfo_max.read_text(encoding="utf-8")
-            except OSError:
-                continue
-            write_sysfs(max_path, max_freq_value)
-        else:
-            write_sysfs(max_path, f"{max_freq}\n")
+    common.apply_cpu_policy(CPUFREQ_DIR, epp, boost, max_freq)
 
 
 def find_ryzenadj() -> Path | None:
@@ -315,19 +287,7 @@ def apply_ryzen_limits(
     if ryzenadj is None:
         return
 
-    subprocess.run(
-        [
-            str(ryzenadj),
-            f"--stapm-limit={stapm}",
-            f"--fast-limit={fast}",
-            f"--slow-limit={slow}",
-            f"--apu-slow-limit={apu}",
-            f"--tctl-temp={tctl}",
-        ],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        check=False,
-    )
+    common.apply_smu_limits(str(ryzenadj), stapm, fast, slow, apu, tctl)
 
 
 def profile_state_is_complete(state: dict[str, str]) -> bool:

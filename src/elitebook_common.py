@@ -25,6 +25,7 @@ import fcntl
 import os
 import re
 import shutil
+import subprocess
 import time
 import typing
 from pathlib import Path
@@ -198,6 +199,133 @@ def sysfs_value_matches(path: Path, desired: str) -> bool:
     """True when a sysfs file already holds the desired value."""
     try:
         return path.read_text(encoding="utf-8", errors="ignore").strip() == desired
+    except OSError:
+        return False
+
+
+def apply_cpu_policy(
+    cpufreq_dir: Path,
+    epp: str,
+    boost: str,
+    max_freq: str,
+    *,
+    skip_unchanged: bool = False,
+) -> list[str]:
+    """Apply boost, EPP and max frequency to every cpufreq policy.
+
+    Returns one message per operation that did not take effect, in the order
+    the caller should report them; an empty list means everything applied.
+    With ``skip_unchanged`` a sysfs file already holding the desired value is
+    left alone, which keeps udev replays from rewriting identical values
+    (without it the write is attempted anyway, for callers that do not care).
+    ``max_freq`` may be the literal ``uncapped``, resolved per policy from
+    cpuinfo_max_freq. The function never prints or exits: the caller decides
+    whether the returned messages are warnings, logs, or nothing at all.
+    """
+    failures: list[str] = []
+
+    boost_value = "1" if boost == "on" else "0"
+    boost_path = cpufreq_dir / "boost"
+    try:
+        boost_exists = boost_path.exists()
+    except OSError:
+        boost_exists = False
+    if boost_exists and not (
+        skip_unchanged and sysfs_value_matches(boost_path, boost_value)
+    ):
+        try:
+            boost_path.write_text(boost_value + "\n", encoding="utf-8")
+        except OSError:
+            failures.append("failed to write cpufreq boost")
+
+    try:
+        policies = sorted(cpufreq_dir.glob("policy*"))
+    except OSError:
+        policies = []
+
+    for policy in policies:
+        try:
+            if not policy.is_dir():
+                continue
+        except OSError:
+            continue
+        max_path = policy / "scaling_max_freq"
+        try:
+            if not max_path.exists():
+                continue
+        except OSError:
+            continue
+        if max_freq == "uncapped":
+            cpuinfo_max = policy / "cpuinfo_max_freq"
+            try:
+                if not cpuinfo_max.is_file():
+                    continue
+                value = cpuinfo_max.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            if skip_unchanged and sysfs_value_matches(max_path, value.strip()):
+                continue
+            try:
+                max_path.write_text(value, encoding="utf-8")
+            except OSError:
+                failures.append(f"failed to restore {policy}/scaling_max_freq")
+        else:
+            if skip_unchanged and sysfs_value_matches(max_path, max_freq):
+                continue
+            try:
+                max_path.write_text(max_freq + "\n", encoding="utf-8")
+            except OSError:
+                failures.append(f"rejected max freq {max_freq} for {policy}")
+
+    epp_applied = 0
+    for policy in policies:
+        epp_path = policy / "energy_performance_preference"
+        try:
+            if not epp_path.exists():
+                continue
+        except OSError:
+            continue
+        if skip_unchanged and sysfs_value_matches(epp_path, epp):
+            epp_applied += 1
+            continue
+        try:
+            epp_path.write_text(epp + "\n", encoding="utf-8")
+            epp_applied += 1
+        except OSError:
+            failures.append(f"failed to write EPP {epp} to {policy}")
+    if epp_applied == 0:
+        failures.append(
+            f"no cpufreq policy accepted EPP {epp}; skipping EPP "
+            "(cpufreq driver not in EPP mode?)"
+        )
+
+    return failures
+
+
+def apply_smu_limits(
+    ryzenadj_bin: str,
+    stapm_mw: str,
+    fast_mw: str,
+    slow_mw: str,
+    apu_mw: str,
+    tctl_c: str,
+) -> bool:
+    """Run RyzenAdj with the five profile limits; False when it could not run."""
+    try:
+        result = subprocess.run(
+            [
+                ryzenadj_bin,
+                f"--stapm-limit={stapm_mw}",
+                f"--fast-limit={fast_mw}",
+                f"--slow-limit={slow_mw}",
+                f"--apu-slow-limit={apu_mw}",
+                f"--tctl-temp={tctl_c}",
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        return result.returncode == 0
     except OSError:
         return False
 
