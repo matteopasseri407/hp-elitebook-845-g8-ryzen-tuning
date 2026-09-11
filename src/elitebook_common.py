@@ -200,3 +200,15 @@ def sysfs_value_matches(path: Path, desired: str) -> bool:
         return path.read_text(encoding="utf-8", errors="ignore").strip() == desired
     except OSError:
         return False
+
+
+def write_atomic(path: Path, content: str, mode: int = 0o644) -> None:
+    """Write text to a file atomically via a temporary file in the same directory."""
+    path.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
+    tmp = path.with_name(f"{path.name}.tmp.{os.getpid()}")
+    tmp.write_text(content, encoding="utf-8")
+    try:
+        os.chmod(tmp, mode)
+    except OSError:
+        pass
+    os.replace(tmp, path)

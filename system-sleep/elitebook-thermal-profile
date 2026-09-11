@@ -1,10 +1,40 @@
-#!/usr/bin/env bash
+#!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
-set -euo pipefail
+"""Reapply the automatic thermal profile after resuming from sleep.
 
-case "${1:-}" in
-  post)
-    ELITEBOOK_PROFILE_SOURCE=system-auto /usr/local/sbin/elitebook-thermal-profile auto >/dev/null 2>&1 || true
-    ;;
-esac
+systemd calls sleep hooks as ``<hook> <pre|post> <operation>``; only the post
+phase matters here, where the dispatcher is re-run so firmware and udev state
+are refreshed. Failures stay silent on purpose: a hook cannot repair the
+profile, and systemd would only log an error nobody acts on.
+"""
 
+from __future__ import annotations
+
+import os
+import subprocess
+import sys
+
+DISPATCHER = "/usr/local/sbin/elitebook-thermal-profile"
+
+
+def main(argv: list[str]) -> int:
+    if not argv or argv[0] != "post":
+        return 0
+
+    env = dict(os.environ)
+    env["ELITEBOOK_PROFILE_SOURCE"] = "system-auto"
+    try:
+        subprocess.run(
+            [DISPATCHER, "auto"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            env=env,
+            check=False,
+        )
+    except OSError:
+        pass
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

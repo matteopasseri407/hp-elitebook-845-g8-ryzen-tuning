@@ -10,7 +10,10 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 
-const PROFILE_SCRIPT = '/usr/local/sbin/elitebook-thermal-profile';
+const PROFILE_SCRIPT =
+    GLib.file_test('/usr/local/sbin/elitebook-thermal-profile', GLib.FileTest.IS_EXECUTABLE)
+        ? '/usr/local/sbin/elitebook-thermal-profile'
+        : '/usr/bin/elitebook-thermal-profile';
 const STATE_DIR = '/run/elitebook-thermal-profile';
 const STATE_FILE = '/run/elitebook-thermal-profile/current';
 const IDLE_STATE_FILE = '/run/elitebook-thermal-profile/idle-watcher';

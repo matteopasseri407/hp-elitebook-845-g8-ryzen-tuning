@@ -28,16 +28,38 @@ Avoid proposing higher limits without measurements. The point of this repository
 
 ## CI
 
-GitHub Actions runs `shellcheck` on the bash scripts and `ruff check` /
-`ruff format --check` on the Python watchers. Run them locally before
-opening a PR:
+GitHub Actions runs `shellcheck` on the shell scripts and `ruff check` /
+`ruff format --check` / `mypy --strict` on the Python sources. Run them
+locally before opening a PR:
 
 ```bash
-shellcheck src/elitebook-thermal-profile scripts/*.sh \
-           system-sleep/elitebook-thermal-profile
-ruff check src/elitebook-idle-watcher src/elitebook-steam-game-watcher
-ruff format --check src/elitebook-idle-watcher \
-                    src/elitebook-steam-game-watcher
+shellcheck scripts/*.sh tests/*.sh
+ruff check \
+  src/elitebook-thermal-profile \
+  src/elitebook_common.py \
+  src/elitebook-idle-watcher \
+  src/elitebook-steam-game-watcher \
+  src/elitebook-power-guard \
+  src/elitebook-hibernate-preflight \
+  system-sleep/elitebook-thermal-profile \
+  tests
+ruff format --check \
+  src/elitebook-thermal-profile \
+  src/elitebook_common.py \
+  src/elitebook-idle-watcher \
+  src/elitebook-steam-game-watcher \
+  src/elitebook-power-guard \
+  src/elitebook-hibernate-preflight \
+  system-sleep/elitebook-thermal-profile \
+  tests
+mypy --strict --scripts-are-modules \
+  src/elitebook-thermal-profile \
+  src/elitebook_common.py \
+  src/elitebook-idle-watcher \
+  src/elitebook-steam-game-watcher \
+  src/elitebook-power-guard \
+  src/elitebook-hibernate-preflight
+mypy --strict system-sleep/elitebook-thermal-profile
 ```
 
 ## Privacy

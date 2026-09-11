@@ -15,7 +15,6 @@ BuildArch:      noarch
 BuildRequires:  python3
 BuildRequires:  systemd-rpm-macros
 
-Requires:       bash
 Requires:       python3
 Requires:       systemd
 Requires:       systemd-udev
@@ -60,8 +59,14 @@ daily UI.
 # Scripts and GNOME Shell files do not need a build step.
 
 %check
-bash -n src/elitebook-power-guard src/elitebook-hibernate-preflight system-sleep/elitebook-thermal-profile
-python3 -m py_compile src/elitebook-thermal-profile src/elitebook_common.py src/elitebook-idle-watcher src/elitebook-steam-game-watcher
+python3 -m py_compile \
+  src/elitebook-thermal-profile \
+  src/elitebook_common.py \
+  src/elitebook-idle-watcher \
+  src/elitebook-steam-game-watcher \
+  src/elitebook-power-guard \
+  src/elitebook-hibernate-preflight \
+  system-sleep/elitebook-thermal-profile
 
 %install
 install -Dm0755 src/elitebook-thermal-profile \
@@ -193,6 +198,9 @@ fi
 - Skip sysfs writes when the value is already in force; SMU limits are still
   reapplied every run so firmware resets keep healing
 - Share sysfs helpers between dispatcher and watchers in one module
+- Rewrite elitebook-power-guard and elitebook-hibernate-preflight from bash
+  to the same stdlib-only Python; parse the hibernate config instead of
+  sourcing it as root shell, and convert the system-sleep hook to Python
 - Name the config file line in refused profile override warnings
 
 * Wed Jul 29 2026 Matteo Passeri <matteopasseri407@users.noreply.github.com> - 0.7.0-1

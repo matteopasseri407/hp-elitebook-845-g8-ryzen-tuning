@@ -24,9 +24,13 @@ EXTDIR = /usr/share/gnome-shell/extensions
 override_dh_auto_build:
 
 override_dh_auto_test:
-	bash -n src/elitebook-power-guard \
+	python3 -m py_compile \
+		src/elitebook-thermal-profile \
+		src/elitebook_common.py \
+		src/elitebook-idle-watcher \
+		src/elitebook-steam-game-watcher \
+		src/elitebook-power-guard \
 		system-sleep/elitebook-thermal-profile
-	python3 -m py_compile src/elitebook-thermal-profile src/elitebook_common.py src/elitebook-idle-watcher src/elitebook-steam-game-watcher
 
 override_dh_auto_install:
 	# The hibernate preflight is intentionally absent: it inspects Fedora-style
