@@ -75,7 +75,18 @@ VALID_EPPS = ("performance", "balance_performance", "balance_power", "power")
 # resolves its cap from ELITEBOOK_BATTERY_SAVER_MAX_FREQ_KHZ at runtime.
 # vrmmax_default is None for "stock" (Ryzen stock ~90A on Cezanne), or a mA string.
 BUILTIN_PROFILES = {
-    "ac": ("balance_power", 22000, 30000, 18000, 18000, 90, "on", None, "balanced", None),
+    "ac": (
+        "balance_power",
+        22000,
+        30000,
+        18000,
+        18000,
+        90,
+        "on",
+        None,
+        "balanced",
+        None,
+    ),
     "performance": (
         "balance_performance",
         22000,
@@ -327,11 +338,7 @@ def print_status() -> None:
             return "0"
 
     vrmmax = current_value("vrmmax_ma")
-    vrm_text = (
-        f", VRM max {int(vrmmax) // 1000} A"
-        if common.is_uint(vrmmax)
-        else ""
-    )
+    vrm_text = f", VRM max {int(vrmmax) // 1000} A" if common.is_uint(vrmmax) else ""
 
     if smu == "ok":
         print(
@@ -847,11 +854,7 @@ def main(argv: list[str]) -> int:
             vrmmax,
         )
 
-        vrm_summary = (
-            f", VRM {int(vrmmax) // 1000}A"
-            if common.is_uint(vrmmax)
-            else ""
-        )
+        vrm_summary = f", VRM {int(vrmmax) // 1000}A" if common.is_uint(vrmmax) else ""
         print(
             f"EliteBook thermal profile '{profile}' applied: boost {boost}, max freq {max_freq}, "
             f"EPP {epp}, FAST {fast}mW, SLOW/APU {slow}mW, Tctl {tctl}C{vrm_summary}."
