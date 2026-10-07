@@ -168,6 +168,38 @@ class DispatcherExtrasTests(unittest.TestCase):
         self.assertIn("outside the safe range", proc.stderr)
         self.assertEqual(_state_value(self.root, "slow_mw"), "18000")
 
+    def test_status_json_reports_battery_defaults(self) -> None:
+        proc = _run(self.env, "battery")
+        self.assertEqual(proc.returncode, 0, msg=proc.stderr)
+
+        payload = self._status_json()
+        self.assertEqual(payload["profile"], "battery")
+        self.assertEqual(payload["smu"], "ok")
+        self.assertEqual(payload["power_mw"]["fast"], "22000")
+        self.assertEqual(payload["tctl_c"], "80")
+        self.assertEqual(payload["vrmmax_ma"], "45000")
+        self.assertEqual(payload["boost"], "on")
+        self.assertEqual(payload["max_freq"], "uncapped")
+
+    def test_status_json_reports_overridden_vrmmax_and_boost(self) -> None:
+        conf = self.root / "profiles.conf"
+        conf.write_text(
+            "BATTERY_VRMMAX_MA=42000\nBATTERY_BOOST=off\nBATTERY_MAX_FREQ_KHZ=2400000\n",
+            encoding="utf-8",
+        )
+        self.env["ELITEBOOK_PROFILE_CONF"] = str(conf)
+
+        proc = _run(self.env, "battery")
+        self.assertEqual(proc.returncode, 0, msg=proc.stderr)
+
+        payload = self._status_json()
+        self.assertEqual(payload["vrmmax_ma"], "42000")
+        self.assertEqual(payload["boost"], "off")
+        self.assertEqual(payload["max_freq"], "2400000")
+        self.assertEqual(_state_value(self.root, "vrmmax_ma"), "42000")
+        self.assertEqual(_state_value(self.root, "boost"), "off")
+        self.assertEqual(_state_value(self.root, "max_freq"), "2400000")
+
 
 if __name__ == "__main__":
     unittest.main()

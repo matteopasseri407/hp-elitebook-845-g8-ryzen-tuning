@@ -1,5 +1,5 @@
 Name:           elitebook-thermal-profile
-Version:        0.8.0
+Version:        0.9.0
 Release:        1%{?dist}
 Summary:        Thermal and power profiles for HP AMD Cezanne laptops
 
@@ -192,6 +192,16 @@ fi
 %{_datadir}/gnome-shell/extensions/%{extension_uuid}/
 
 %changelog
+* Wed Oct 07 2026 Matteo Passeri <matteopasseri407@users.noreply.github.com> - 0.9.0-1
+- Protect against battery brownouts and transient voltage droops under heavy
+  multi-core/AVX2 load: set battery profile burst power (FAST) to 22W,
+  Tctl thermal target to 80 C, and apply a 45A VRM peak current (EDC) limit
+  via RyzenAdj (--vrmmax-current)
+- Add --vrmmax-current support to SMU limit application with profiles.conf
+  overrides for VRMMAX_MA (15-120A)
+- Support BOOST and MAX_FREQ_KHZ overrides in profiles.conf
+- Persist and report VRM max current in status and status --json
+
 * Tue Sep 08 2026 Matteo Passeri <matteopasseri407@users.noreply.github.com> - 0.8.0-1
 - Rewrite the dispatcher from bash to stdlib-only Python with identical CLI,
   state files and messages; add status --json for scripts

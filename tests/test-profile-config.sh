@@ -153,6 +153,36 @@ run_with_config saver "BATTERY_SAVER_TCTL_C=70" battery-saver
 [[ "$(state_value saver tctl_c)" = "70" ]] ||
   fail "the battery-saver profile did not read BATTERY_SAVER_ keys"
 
+# --- VRMMAX, BOOST, and MAX_FREQ overrides ---------------------------------
+run_with_config extra_overrides "BATTERY_VRMMAX_MA=42000
+BATTERY_BOOST=off
+BATTERY_MAX_FREQ_KHZ=2400000" battery
+[[ "$(state_value extra_overrides vrmmax_ma)" = "42000" ]] ||
+  fail "BATTERY_VRMMAX_MA override was ignored: got '$(state_value extra_overrides vrmmax_ma)'"
+[[ "$(state_value extra_overrides boost)" = "off" ]] ||
+  fail "BATTERY_BOOST override was ignored: got '$(state_value extra_overrides boost)'"
+[[ "$(cat "$TMPDIR/extra_overrides/cpufreq/boost")" = "0" ]] ||
+  fail "boost override was not written to sysfs"
+[[ "$(state_value extra_overrides max_freq)" = "2400000" ]] ||
+  fail "BATTERY_MAX_FREQ_KHZ override was ignored: got '$(state_value extra_overrides max_freq)'"
+[[ "$(cat "$TMPDIR/extra_overrides/cpufreq/policy0/scaling_max_freq")" = "2400000" ]] ||
+  fail "max frequency override was not written to sysfs"
+
+# --- invalid VRMMAX, BOOST, and MAX_FREQ are refused -----------------------
+run_with_config invalid_extras "BATTERY_VRMMAX_MA=5000
+BATTERY_BOOST=maybe
+BATTERY_MAX_FREQ_KHZ=99999999" battery
+[[ "$(state_value invalid_extras vrmmax_ma)" = "45000" ]] ||
+  fail "out-of-range VRMMAX_MA was accepted: got '$(state_value invalid_extras vrmmax_ma)'"
+[[ "$(state_value invalid_extras boost)" = "on" ]] ||
+  fail "invalid BOOST was accepted: got '$(state_value invalid_extras boost)'"
+[[ "$(state_value invalid_extras max_freq)" = "uncapped" ]] ||
+  fail "out-of-range MAX_FREQ_KHZ was accepted: got '$(state_value invalid_extras max_freq)'"
+grep -q "outside the safe range" "$TMPDIR/invalid_extras/err" ||
+  fail "no message explained refused out-of-range VRMMAX_MA or MAX_FREQ"
+grep -q "is not a valid boost setting" "$TMPDIR/invalid_extras/err" ||
+  fail "no message explained refused invalid boost"
+
 # --- the shipped example parses as a no-op ---------------------------------
 # Every line in it is commented out, so it must change nothing.
 run_with_config example "$(cat "$REPO_DIR/config/profiles.conf.example")" ac

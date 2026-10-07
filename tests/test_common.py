@@ -110,3 +110,18 @@ def test_apply_smu_limits_reports_success_and_failure(tmp_path: Path) -> None:
     assert not common.apply_smu_limits(
         str(tmp_path / "missing"), "22000", "30000", "18000", "18000", "90"
     )
+
+
+def test_apply_smu_limits_forwards_vrmmax(tmp_path: Path) -> None:
+    recorder = tmp_path / "ryzenadj-recorder"
+    args_file = tmp_path / "args.txt"
+    recorder.write_text(
+        f'#!/bin/sh\necho "$*" > "{args_file}"\nexit 0\n', encoding="utf-8"
+    )
+    recorder.chmod(0o755)
+
+    assert common.apply_smu_limits(
+        str(recorder), "15000", "22000", "15000", "15000", "80", "45000"
+    )
+    args = args_file.read_text(encoding="utf-8")
+    assert "--vrmmax-current=45000" in args

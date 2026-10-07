@@ -309,18 +309,22 @@ def apply_smu_limits(
     slow_mw: str,
     apu_mw: str,
     tctl_c: str,
+    vrmmax_ma: str | None = None,
 ) -> bool:
-    """Run RyzenAdj with the five profile limits; False when it could not run."""
+    """Run RyzenAdj with profile limits; False when it could not run."""
+    cmd = [
+        ryzenadj_bin,
+        f"--stapm-limit={stapm_mw}",
+        f"--fast-limit={fast_mw}",
+        f"--slow-limit={slow_mw}",
+        f"--apu-slow-limit={apu_mw}",
+        f"--tctl-temp={tctl_c}",
+    ]
+    if vrmmax_ma and vrmmax_ma != "stock":
+        cmd.append(f"--vrmmax-current={vrmmax_ma}")
     try:
         result = subprocess.run(
-            [
-                ryzenadj_bin,
-                f"--stapm-limit={stapm_mw}",
-                f"--fast-limit={fast_mw}",
-                f"--slow-limit={slow_mw}",
-                f"--apu-slow-limit={apu_mw}",
-                f"--tctl-temp={tctl_c}",
-            ],
+            cmd,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             check=False,

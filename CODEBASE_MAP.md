@@ -74,7 +74,7 @@ flowchart TD
 
 ## 3. Mappa dei Componenti e Simboli (`src/`)
 
-### [`src/elitebook_common.py`](file:///home/matteo/hp-elitebook-845-g8-ryzen-tuning/src/elitebook_common.py)
+### [`src/elitebook_common.py`](src/elitebook_common.py)
 
 Modulo helper stdlib-only condiviso tra tutti i daemon e script.
 
@@ -93,7 +93,7 @@ Modulo helper stdlib-only condiviso tra tutti i daemon e script.
 | `sysfs_value_matches` | function | L197 | `def sysfs_value_matches(path, desired) -> bool` |
 | `write_atomic` | function | L205 | `def write_atomic(path, content, mode) -> None` |
 
-### [`src/elitebook-thermal-profile`](file:///home/matteo/hp-elitebook-845-g8-ryzen-tuning/src/elitebook-thermal-profile)
+### [`src/elitebook-thermal-profile`](src/elitebook-thermal-profile)
 
 Dispatcher principale CLI e daemon: calcola limiti SMU, scrive sysfs idempotenti, espone `status --json`.
 
@@ -130,7 +130,7 @@ Dispatcher principale CLI e daemon: calcola limiti SMU, scrive sysfs idempotenti
 | `reexec_via_sudo` | function | L695 | `def reexec_via_sudo(argv) -> typing.NoReturn` |
 | `main` | function | L714 | `def main(argv) -> int` |
 
-### [`src/elitebook-power-guard`](file:///home/matteo/hp-elitebook-845-g8-ryzen-tuning/src/elitebook-power-guard)
+### [`src/elitebook-power-guard`](src/elitebook-power-guard)
 
 Watchdog di integrità: verifica servizi mascherati, udev, headroom termico e fallback sysfs diretto.
 
@@ -160,7 +160,7 @@ Watchdog di integrità: verifica servizi mascherati, udev, headroom termico e fa
 | `check_thermal_headroom` | function | L565 | `def check_thermal_headroom(state_dir, min_samples, over_target_percent, issues) -> None` |
 | `main` | function | L602 | `def main(argv) -> int` |
 
-### [`src/elitebook-idle-watcher`](file:///home/matteo/hp-elitebook-845-g8-ryzen-tuning/src/elitebook-idle-watcher)
+### [`src/elitebook-idle-watcher`](src/elitebook-idle-watcher)
 
 Daemon di campionamento 1 Hz: applica overlay soft/deep idle e traccia i picchi termici.
 
@@ -197,7 +197,7 @@ Daemon di campionamento 1 Hz: applica overlay soft/deep idle e traccia i picchi 
 | `print_status` | function | L524 | `def print_status() -> None` |
 | `main` | function | L533 | `def main() -> int` |
 
-### [`src/elitebook-steam-game-watcher`](file:///home/matteo/hp-elitebook-845-g8-ryzen-tuning/src/elitebook-steam-game-watcher)
+### [`src/elitebook-steam-game-watcher`](src/elitebook-steam-game-watcher)
 
 Watcher dei processi Steam/gioco: eleva il profilo a `gaming` in modo trasparente.
 
@@ -218,7 +218,7 @@ Watcher dei processi Steam/gioco: eleva il profilo a `gaming` in modo trasparent
 | `check_once` | function | L218 | `def check_once() -> bool` |
 | `main` | function | L263 | `def main() -> int` |
 
-### [`src/elitebook-hibernate-preflight`](file:///home/matteo/hp-elitebook-845-g8-ryzen-tuning/src/elitebook-hibernate-preflight)
+### [`src/elitebook-hibernate-preflight`](src/elitebook-hibernate-preflight)
 
 Validatore pre-ibernazione: controlla swapfile btrfs, offset, lockdown del kernel e boot args.
 
@@ -235,7 +235,7 @@ Validatore pre-ibernazione: controlla swapfile btrfs, offset, lockdown del kerne
 ## 4. Estensione GNOME Shell (`gnome-extension/`)
 
 Interfaccia grafica integrata nel pannello superiore di GNOME Shell (`elitebook-thermal-profile@matteopasseri.github.io`):
-- [`extension.js`](file:///home/matteo/hp-elitebook-845-g8-ryzen-tuning/gnome-extension/elitebook-thermal-profile@matteopasseri.github.io/extension.js):
+- [`extension.js`](gnome-extension/elitebook-thermal-profile@matteopasseri.github.io/extension.js):
   - `PROFILE_SCRIPT`: risolto dinamicamente tramite `GLib.file_test` tra `/usr/local/sbin` e `/usr/bin`.
   - `ThermalIndicator`: pulsante pannello con menu a tendina.
   - Monitoraggio real-time: `Gio.File.monitor_directory` su `/run/elitebook-thermal-profile` con debouncing.

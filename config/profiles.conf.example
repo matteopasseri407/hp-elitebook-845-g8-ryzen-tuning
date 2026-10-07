@@ -12,15 +12,18 @@
 #   profiles  AC, PERFORMANCE, BATTERY, BATTERY_SAVER, GAMING, COOL
 #   values    STAPM_MW, FAST_MW, SLOW_MW, APU_MW   power, in milliwatts
 #             TCTL_C                               thermal target, in Celsius
+#             VRMMAX_MA                            peak VRM current (EDC), in mA
+#             BOOST                                on, off
+#             MAX_FREQ_KHZ                         kHz cap or uncapped
 #             EPP                                  performance,
 #                                                  balance_performance,
 #                                                  balance_power, power
 #
-# Accepted ranges: power 4000-45000 mW, TCTL_C 60-100. A value outside its
-# range, or one that is not a number, is refused with a message on stderr and
-# the built-in default is used instead: a typo here cannot leave the machine
-# untuned, and cannot be used to set a limit the chassis has no chance of
-# dissipating.
+# Accepted ranges: power 4000-45000 mW, TCTL_C 60-100, VRMMAX_MA 15000-120000 mA,
+# MAX_FREQ_KHZ 1000000-5000000 kHz or uncapped. A value outside its range, or one
+# that is not valid, is refused with a message on stderr and the built-in default
+# is used instead: a typo here cannot leave the machine untuned, and cannot be used
+# to set a limit the chassis has no chance of dissipating.
 #
 # Raising these numbers above the defaults moves the machine back towards the
 # stock behaviour this project exists to avoid. Lowering them is the safe
@@ -41,3 +44,6 @@
 # More conservative battery behaviour:
 #BATTERY_SLOW_MW=12000
 #BATTERY_EPP=power
+#BATTERY_VRMMAX_MA=40000
+#BATTERY_BOOST=off
+

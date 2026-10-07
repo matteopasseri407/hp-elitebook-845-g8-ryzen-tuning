@@ -27,7 +27,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import elitebook_common as common  # noqa: E402
 
-ELITEBOOK_VERSION = "0.8.0"
+ELITEBOOK_VERSION = "0.9.0"
 
 STATE_DIR = Path(
     os.environ.get("ELITEBOOK_THERMAL_STATE_DIR", "/run/elitebook-thermal-profile")
@@ -70,11 +70,12 @@ CEZANNE_RE = re.compile(r"AMD Ryzen (5|7) PRO (5650U|5750U|5850U)")
 REMBRANDT_RE = re.compile(r"AMD Ryzen (5|7) PRO (6650U|6850U)")
 VALID_EPPS = ("performance", "balance_performance", "balance_power", "power")
 
-# (epp, stapm, fast, slow, apu, tctl, boost, max_freq_default, tuned_profile)
+# (epp, stapm, fast, slow, apu, tctl, boost, max_freq_default, tuned_profile, vrmmax_default)
 # max_freq_default is None for "uncapped", else a kHz string. battery-saver
 # resolves its cap from ELITEBOOK_BATTERY_SAVER_MAX_FREQ_KHZ at runtime.
+# vrmmax_default is None for "stock" (Ryzen stock ~90A on Cezanne), or a mA string.
 BUILTIN_PROFILES = {
-    "ac": ("balance_power", 22000, 30000, 18000, 18000, 90, "on", None, "balanced"),
+    "ac": ("balance_power", 22000, 30000, 18000, 18000, 90, "on", None, "balanced", None),
     "performance": (
         "balance_performance",
         22000,
@@ -85,17 +86,19 @@ BUILTIN_PROFILES = {
         "on",
         None,
         "balanced",
+        None,
     ),
     "battery": (
         "balance_power",
-        18000,
-        30000,
+        15000,
+        22000,
         15000,
         15000,
-        88,
+        80,
         "on",
         None,
         "balanced",
+        "45000",
     ),
     "battery-saver": (
         "power",
@@ -107,6 +110,7 @@ BUILTIN_PROFILES = {
         "off",
         "BATTERY_SAVER_ENV",
         "powersave",
+        "30000",
     ),
     "gaming": (
         "balance_performance",
@@ -118,8 +122,9 @@ BUILTIN_PROFILES = {
         "on",
         None,
         "balanced",
+        None,
     ),
-    "cool": ("power", 16000, 22000, 12000, 12000, 85, "on", None, "balanced"),
+    "cool": ("power", 16000, 22000, 12000, 12000, 85, "on", None, "balanced", "40000"),
 }
 
 SUDO_PRESERVE_ENV = (
@@ -321,17 +326,24 @@ def print_status() -> None:
         except ValueError:
             return "0"
 
+    vrmmax = current_value("vrmmax_ma")
+    vrm_text = (
+        f", VRM max {int(vrmmax) // 1000} A"
+        if common.is_uint(vrmmax)
+        else ""
+    )
+
     if smu == "ok":
         print(
-            f"Power limits: sustained {watts(slow)} W, burst {watts(fast)} W, thermal target {tctl or '?'} C"
+            f"Power limits: sustained {watts(slow)} W, burst {watts(fast)} W, thermal target {tctl or '?'} C{vrm_text}"
         )
     elif smu == "":
         print(
-            f"Power limits: recorded {watts(slow)} W sustained, {watts(fast)} W burst, {tctl or '?'} C target"
+            f"Power limits: recorded {watts(slow)} W sustained, {watts(fast)} W burst, {tctl or '?'} C target{vrm_text}"
         )
     else:
         print(
-            f"Power limits: requested {watts(slow)} W sustained / {watts(fast)} W burst / {tctl or '?'} C, NOT in force"
+            f"Power limits: requested {watts(slow)} W sustained / {watts(fast)} W burst / {tctl or '?'} C{vrm_text}, NOT in force"
         )
 
     battery = battery_capacity()
@@ -381,6 +393,7 @@ def print_status_json() -> None:
         "epp": state.get("epp", "unknown") or "unknown",
         "boost": state.get("boost", "unknown") or "unknown",
         "max_freq": state.get("max_freq", "unknown") or "unknown",
+        "vrmmax_ma": state.get("vrmmax_ma", "stock") or "stock",
         "power_mw": {
             "stapm": state.get("stapm_mw", "unknown") or "unknown",
             "fast": state.get("fast_mw", "unknown") or "unknown",
@@ -528,6 +541,45 @@ def override_epp(key: str, current: str) -> str:
     return current
 
 
+def override_boost(key: str, current: str) -> str:
+    value, lineno = profile_conf_value(key)
+    if value is None:
+        return current
+    lower = value.lower()
+    if lower in ("on", "1", "yes", "true"):
+        return "on"
+    if lower in ("off", "0", "no", "false"):
+        return "off"
+    warn(
+        f"{PROFILE_CONF} line {lineno}: {key}='{value}' is not a valid boost "
+        f"setting (expected on/off); keeping {current}"
+    )
+    return current
+
+
+def override_max_freq(key: str, current: str) -> str:
+    value, lineno = profile_conf_value(key)
+    if value is None:
+        return current
+    lower = value.lower()
+    if lower in ("uncapped", "none", "0"):
+        return "uncapped"
+    if not common.is_uint(value):
+        warn(
+            f"{PROFILE_CONF} line {lineno}: {key}='{value}' must be an integer kHz "
+            f"or 'uncapped'; keeping {current}"
+        )
+        return current
+    khz = int(value)
+    if khz < 1000000 or khz > 5000000:
+        warn(
+            f"{PROFILE_CONF} line {lineno}: {key}={value} is outside the safe "
+            f"range 1000000-5000000 kHz; keeping {current}"
+        )
+        return current
+    return value
+
+
 def acquire_dispatcher_lock() -> typing.TextIO:
     try:
         return common.acquire_dispatcher_lock(STATE_DIR, 10)
@@ -579,6 +631,7 @@ def write_state(
     tctl: str,
     boost: str,
     max_freq: str,
+    vrmmax: str = "stock",
 ) -> None:
     battery_raw = common.battery_capacity(POWER_SUPPLY_DIR)
     battery_percent = str(battery_raw) if battery_raw is not None else "unknown"
@@ -598,6 +651,7 @@ def write_state(
         f"tctl_c={tctl}\n"
         f"boost={boost}\n"
         f"max_freq={max_freq}\n"
+        f"vrmmax_ma={vrmmax}\n"
         f"battery_percent={battery_percent}\n"
         f"low_battery_threshold_percent={threshold}\n"
         f"updated={updated}\n"
@@ -710,6 +764,7 @@ def main(argv: list[str]) -> int:
             boost,
             max_freq_default,
             tuned_profile,
+            vrmmax_default,
         ) = builtin
         stapm, fast, slow, apu, tctl = (
             str(stapm_i),
@@ -718,6 +773,7 @@ def main(argv: list[str]) -> int:
             str(apu_i),
             str(tctl_i),
         )
+        vrmmax = str(vrmmax_default) if vrmmax_default is not None else "stock"
         if max_freq_default == "BATTERY_SAVER_ENV":
             max_freq = (
                 os.environ.get("ELITEBOOK_BATTERY_SAVER_MAX_FREQ_KHZ", "1800000")
@@ -738,6 +794,9 @@ def main(argv: list[str]) -> int:
         apu = override_uint(f"{prefix}_APU_MW", 4000, 45000, apu)
         tctl = override_uint(f"{prefix}_TCTL_C", 60, 100, tctl)
         epp = override_epp(f"{prefix}_EPP", epp)
+        boost = override_boost(f"{prefix}_BOOST", boost)
+        max_freq = override_max_freq(f"{prefix}_MAX_FREQ_KHZ", max_freq)
+        vrmmax = override_uint(f"{prefix}_VRMMAX_MA", 15000, 120000, vrmmax)
 
         apply_tuned_profile(tuned_profile)
         for failure in common.apply_cpu_policy(
@@ -747,7 +806,10 @@ def main(argv: list[str]) -> int:
 
         smu_status = "unavailable"
         if ryzenadj_bin:
-            ok = common.apply_smu_limits(ryzenadj_bin, stapm, fast, slow, apu, tctl)
+            vrmmax_arg = vrmmax if vrmmax != "stock" else None
+            ok = common.apply_smu_limits(
+                ryzenadj_bin, stapm, fast, slow, apu, tctl, vrmmax_arg
+            )
             if ok:
                 smu_status = "ok"
             else:
@@ -782,11 +844,17 @@ def main(argv: list[str]) -> int:
             tctl,
             boost,
             max_freq,
+            vrmmax,
         )
 
+        vrm_summary = (
+            f", VRM {int(vrmmax) // 1000}A"
+            if common.is_uint(vrmmax)
+            else ""
+        )
         print(
             f"EliteBook thermal profile '{profile}' applied: boost {boost}, max freq {max_freq}, "
-            f"EPP {epp}, FAST {fast}mW, SLOW/APU {slow}mW, Tctl {tctl}C."
+            f"EPP {epp}, FAST {fast}mW, SLOW/APU {slow}mW, Tctl {tctl}C{vrm_summary}."
         )
         return 0
     finally:
