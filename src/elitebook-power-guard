@@ -17,7 +17,10 @@ from pathlib import Path
 
 # Modules sit next to the script in a source install and in a private
 # library directory in the distribution packages.
-for _lib in ("/usr/lib/elitebook-thermal-profile", os.path.dirname(os.path.abspath(__file__))):
+for _lib in (
+    "/usr/lib/elitebook-thermal-profile",
+    os.path.dirname(os.path.abspath(__file__)),
+):
     if _lib not in sys.path:
         sys.path.insert(0, _lib)
 
