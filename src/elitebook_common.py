@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Shared stdlib-only helpers for the EliteBook thermal profile stack.
 
