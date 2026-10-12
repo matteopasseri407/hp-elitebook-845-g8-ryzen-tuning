@@ -58,6 +58,14 @@ override_dh_auto_install:
 	sed -i -e 's#/usr/local/sbin/elitebook-thermal-profile#$(BINDIR)/elitebook-thermal-profile#g' \
 		$(GNOME_PKG)$(EXTDIR)/$(EXTENSION_UUID)/extension.js
 
+# dh_fixperms makes everything under /usr/bin executable; the modules are
+# only imported by the CLI and the guard.
+override_dh_fixperms:
+	dh_fixperms
+	chmod 0644 $(PKG)$(BINDIR)/elitebook_common.py \
+		$(PKG)$(BINDIR)/elitebook_profiles.py \
+		$(PKG)$(BINDIR)/elitebook_engine.py
+
 # Units ship disabled and stopped. Tuning hardware is an explicit decision the
 # user makes after checking the supported hardware table, never a side effect
 # of installing a package.

@@ -58,7 +58,7 @@ elitebook-thermal-profile (0.8.0) unstable; urgency=medium
     root shell, and the system-sleep hook now runs Python too.
   * Name the config file line in refused profile override warnings.
 
-  -- Matteo Passeri <matteopasseri407@users.noreply.github.com>  Tue, 08 Sep 2026 17:23:00 +0200
+ -- Matteo Passeri <matteopasseri407@users.noreply.github.com>  Tue, 08 Sep 2026 17:23:00 +0200
 
 elitebook-thermal-profile (0.7.0) unstable; urgency=medium
 
