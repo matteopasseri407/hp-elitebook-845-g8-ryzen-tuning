@@ -1,5 +1,5 @@
 Name:           elitebook-thermal-profile
-Version:        0.9.0
+Version:        0.10.0
 Release:        1%{?dist}
 Summary:        Thermal and power profiles for HP AMD Cezanne laptops
 
@@ -17,7 +17,6 @@ BuildRequires:  systemd-rpm-macros
 
 Requires:       python3
 Requires:       systemd
-Requires:       systemd-udev
 Requires:       tuned
 Requires:       util-linux-core
 Recommends:     ryzenadj >= 0.17.0
@@ -28,15 +27,13 @@ Requires(preun):  systemd
 Requires(postun): systemd
 
 %{!?_unitdir:%global _unitdir %{_prefix}/lib/systemd/system}
-%{!?_udevrulesdir:%global _udevrulesdir %{_prefix}/lib/udev/rules.d}
-%global _systemd_sleepdir %{_prefix}/lib/systemd/system-sleep
 
 %description
 User-space thermal and power profile integration for selected HP EliteBook and
 ProBook AMD Cezanne laptops on Linux. It combines AMD P-State EPP, CPU
-frequency policy, service units, udev, and RyzenAdj-driven SMU limits into a
-daily-driver profile dispatcher with idle, AC/battery, update guard, and Steam
-game automation.
+frequency policy, a systemd service, and RyzenAdj-driven SMU limits. A single
+daemon handles AC/battery, idle, Steam and resume, and an update guard timer
+keeps conflicting power backends masked.
 
 Full SMU control requires a RyzenAdj binary. Without RyzenAdj, the profile
 stack degrades to kernel EPP, boost, and frequency controls where possible.
@@ -62,41 +59,31 @@ daily UI.
 python3 -m py_compile \
   src/elitebook-thermal-profile \
   src/elitebook_common.py \
-  src/elitebook-idle-watcher \
-  src/elitebook-steam-game-watcher \
+  src/elitebook_profiles.py \
+  src/elitebook_engine.py \
   src/elitebook-power-guard \
-  src/elitebook-hibernate-preflight \
-  system-sleep/elitebook-thermal-profile
+  src/elitebook-hibernate-preflight
 
 %install
 install -Dm0755 src/elitebook-thermal-profile \
   %{buildroot}%{_bindir}/elitebook-thermal-profile
 install -Dm0644 src/elitebook_common.py \
   %{buildroot}%{_bindir}/elitebook_common.py
-install -Dm0755 src/elitebook-idle-watcher \
-  %{buildroot}%{_bindir}/elitebook-idle-watcher
+install -Dm0644 src/elitebook_profiles.py \
+  %{buildroot}%{_bindir}/elitebook_profiles.py
+install -Dm0644 src/elitebook_engine.py \
+  %{buildroot}%{_bindir}/elitebook_engine.py
 install -Dm0755 src/elitebook-power-guard \
   %{buildroot}%{_bindir}/elitebook-power-guard
-install -Dm0755 src/elitebook-steam-game-watcher \
-  %{buildroot}%{_bindir}/elitebook-steam-game-watcher
 install -Dm0755 src/elitebook-hibernate-preflight \
   %{buildroot}%{_bindir}/elitebook-hibernate-preflight
 
 install -Dm0644 systemd/elitebook-thermal-profile.service \
   %{buildroot}%{_unitdir}/elitebook-thermal-profile.service
-install -Dm0644 systemd/elitebook-idle-watcher.service \
-  %{buildroot}%{_unitdir}/elitebook-idle-watcher.service
-install -Dm0644 systemd/elitebook-steam-game-watcher.service \
-  %{buildroot}%{_unitdir}/elitebook-steam-game-watcher.service
 install -Dm0644 systemd/elitebook-power-guard.service \
   %{buildroot}%{_unitdir}/elitebook-power-guard.service
 install -Dm0644 systemd/elitebook-power-guard.timer \
   %{buildroot}%{_unitdir}/elitebook-power-guard.timer
-
-install -Dm0644 udev/90-elitebook-thermal-profile.rules \
-  %{buildroot}%{_udevrulesdir}/90-elitebook-thermal-profile.rules
-install -Dm0755 system-sleep/elitebook-thermal-profile \
-  %{buildroot}%{_systemd_sleepdir}/elitebook-thermal-profile
 
 install -d %{buildroot}%{_datadir}/gnome-shell/extensions
 cp -a gnome-extension/%{extension_uuid} %{buildroot}%{_datadir}/gnome-shell/extensions/
@@ -121,35 +108,34 @@ install -Dm0644 config/profiles.conf.example \
 sed -i \
   -e 's#/usr/local/sbin#%{_bindir}#g' \
   %{buildroot}%{_unitdir}/elitebook-*.service \
-  %{buildroot}%{_systemd_sleepdir}/elitebook-thermal-profile \
   %{buildroot}%{_datadir}/%{name}/examples/systemd-hibernate.service.d/10-elitebook-preflight.conf \
   %{buildroot}%{_datadir}/%{name}/examples/systemd-suspend-then-hibernate.service.d/10-elitebook-preflight.conf
 
 sed -i \
   -e 's#/usr/local/sbin#%{_bindir}#g' \
-  -e 's#/etc/udev/rules.d/90-elitebook-thermal-profile.rules#%{_udevrulesdir}/90-elitebook-thermal-profile.rules#g' \
-  -e 's#/etc/systemd/system-sleep/elitebook-thermal-profile#%{_systemd_sleepdir}/elitebook-thermal-profile#g' \
-  %{buildroot}%{_bindir}/elitebook-power-guard \
-  %{buildroot}%{_bindir}/elitebook-steam-game-watcher
+  %{buildroot}%{_bindir}/elitebook-power-guard
 
 sed -i \
   -e 's#/usr/local/sbin/elitebook-thermal-profile#%{_bindir}/elitebook-thermal-profile#g' \
   %{buildroot}%{_datadir}/gnome-shell/extensions/%{extension_uuid}/extension.js
 
 %post
-%systemd_post elitebook-thermal-profile.service elitebook-idle-watcher.service elitebook-steam-game-watcher.service elitebook-power-guard.timer
-if command -v udevadm >/dev/null 2>&1; then
-  udevadm control --reload-rules >/dev/null 2>&1 || :
-fi
+%systemd_post elitebook-thermal-profile.service elitebook-power-guard.timer
+# Earlier releases shipped separate watcher units. The daemon replaces them,
+# and the old units would otherwise keep running after the upgrade.
+systemctl disable --now elitebook-idle-watcher.service elitebook-steam-game-watcher.service >/dev/null 2>&1 || :
 cat <<'EOF'
 elitebook-thermal-profile installed.
 
 Enable it explicitly after reviewing the supported hardware table:
   sudo systemctl enable --now elitebook-thermal-profile.service
-  sudo systemctl enable --now elitebook-idle-watcher.service
-  sudo systemctl enable --now elitebook-steam-game-watcher.service
   sudo systemctl enable --now elitebook-power-guard.timer
   sudo systemctl start elitebook-power-guard.service
+
+The daemon also runs the idle overlay and Steam game detection. To switch
+either off, add Environment=ELITEBOOK_IDLE_OVERLAY=0 or
+Environment=ELITEBOOK_STEAM_DETECTION=0 under [Service] in a drop-in for
+elitebook-thermal-profile.service.
 
 Full SMU control requires RyzenAdj. Without it, sysfs fallback controls still
 cover EPP, boost, and CPU frequency where supported by the kernel.
@@ -159,10 +145,10 @@ The btrfs swapfile hibernate preflight is inactive by default; see
 EOF
 
 %preun
-%systemd_preun elitebook-thermal-profile.service elitebook-idle-watcher.service elitebook-steam-game-watcher.service elitebook-power-guard.timer
+%systemd_preun elitebook-thermal-profile.service elitebook-power-guard.timer
 
 %postun
-%systemd_postun_with_restart elitebook-thermal-profile.service elitebook-idle-watcher.service elitebook-steam-game-watcher.service elitebook-power-guard.timer
+%systemd_postun_with_restart elitebook-thermal-profile.service elitebook-power-guard.timer
 if command -v udevadm >/dev/null 2>&1; then
   udevadm control --reload-rules >/dev/null 2>&1 || :
 fi
@@ -174,17 +160,13 @@ fi
 %config(noreplace) %{_sysconfdir}/%{name}/profiles.conf
 %{_bindir}/elitebook-thermal-profile
 %{_bindir}/elitebook_common.py
-%{_bindir}/elitebook-idle-watcher
+%{_bindir}/elitebook_profiles.py
+%{_bindir}/elitebook_engine.py
 %{_bindir}/elitebook-power-guard
-%{_bindir}/elitebook-steam-game-watcher
 %{_bindir}/elitebook-hibernate-preflight
 %{_unitdir}/elitebook-thermal-profile.service
-%{_unitdir}/elitebook-idle-watcher.service
-%{_unitdir}/elitebook-steam-game-watcher.service
 %{_unitdir}/elitebook-power-guard.service
 %{_unitdir}/elitebook-power-guard.timer
-%{_udevrulesdir}/90-elitebook-thermal-profile.rules
-%{_systemd_sleepdir}/elitebook-thermal-profile
 %{_datadir}/%{name}/
 
 %files -n gnome-shell-extension-elitebook-thermal-profile
@@ -192,6 +174,13 @@ fi
 %{_datadir}/gnome-shell/extensions/%{extension_uuid}/
 
 %changelog
+* Mon Oct 12 2026 Matteo Passeri <matteopasseri407@users.noreply.github.com> - 0.10.0-1
+- Replace the dispatcher, udev rule, sleep hook, idle watcher and Steam
+  watcher with one daemon that is the only writer of power settings
+- Stop reapplying the profile on every battery level update
+- Add RUNTIME_PM and PANEL_POWER_SAVINGS profile keys
+- New commands: reassert, daemon, apply-once
+
 * Wed Oct 07 2026 Matteo Passeri <matteopasseri407@users.noreply.github.com> - 0.9.0-1
 - Protect against battery brownouts and transient voltage droops under heavy
   multi-core/AVX2 load: set battery profile burst power (FAST) to 22W,

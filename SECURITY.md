@@ -26,9 +26,9 @@ Include:
 
 In scope:
 
-- privilege escalation through the installed scripts, watchers, or
-  systemd units
-- escape from the systemd hardening on the watcher services
+- privilege escalation through the installed scripts, the daemon's control
+  socket, or systemd units
+- escape from the systemd hardening on the daemon service
 - writes to sysfs or RyzenAdj that could damage hardware
 - the polkit / pkexec integration used by the GNOME Shell extension
 
@@ -58,8 +58,7 @@ If you suspect a deployed installation is at risk:
 ```bash
 sudo systemctl disable --now \
     elitebook-thermal-profile.service \
-    elitebook-idle-watcher.service \
-    elitebook-steam-game-watcher.service
+    elitebook-power-guard.timer
 sudo ./scripts/uninstall.sh
 sudo reboot
 ```

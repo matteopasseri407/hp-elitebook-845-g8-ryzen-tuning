@@ -72,11 +72,11 @@ run_with_config() {
   fi
 
   if [[ "$EUID" -eq 0 ]]; then
-    env "${env_args[@]}" "$REPO_DIR/src/elitebook-thermal-profile" "$profile" \
+    env "${env_args[@]}" "$REPO_DIR/src/elitebook-thermal-profile" apply-once "$profile" \
       >"$root/out" 2>"$root/err" && echo 0 >"$root/rc" || echo $? >"$root/rc"
   else
     # shellcheck disable=SC2024
-    sudo -n env "${env_args[@]}" "$REPO_DIR/src/elitebook-thermal-profile" "$profile" \
+    sudo -n env "${env_args[@]}" "$REPO_DIR/src/elitebook-thermal-profile" apply-once "$profile" \
       >"$root/out" 2>"$root/err" && echo 0 >"$root/rc" || echo $? >"$root/rc"
   fi
 }

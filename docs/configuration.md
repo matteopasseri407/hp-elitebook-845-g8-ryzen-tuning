@@ -22,7 +22,7 @@ A reference copy with every key documented is at
 ## Format
 
 Plain `KEY=VALUE`, one per line. `#` starts a comment. The file is parsed, not
-executed: nothing in it can run commands, even though the dispatcher runs as
+executed: nothing in it can run commands, even though the daemon runs as
 root.
 
 Keys are `<PROFILE>_<VALUE>`:
@@ -79,8 +79,12 @@ behaviour this project exists to avoid. Lowering them is the safe direction.
 
 ## Applying and checking
 
+The service rereads `profiles.conf` within about five seconds of a change and
+applies it. No command is needed. `auto` still works if you want to reapply
+at once; it also clears a manual profile choice.
+
 ```bash
-sudo elitebook-thermal-profile auto     # apply
+sudo elitebook-thermal-profile auto     # optional: reapply now and clear a manual choice
 elitebook-thermal-profile status        # confirm what is actually in force
 ```
 
@@ -90,10 +94,12 @@ package temperature. Scripts should use `status --json` instead of parsing
 that text.
 
 ```
-Profile:      ac (system automation)
+Profile:      ac (automatic (AC/battery))
 SMU limits:   applied
 CPU policy:   EPP balance_power, boost on, max frequency uncapped
 Power limits: sustained 18 W, burst 30 W, thermal target 90 C
+Devices:      kernel defaults, panel power saving off
+Idle:         off
 Battery:      100% (on AC)
 CPU temp:     52 C
 Updated:      2026-07-29T18:41:02+02:00
@@ -110,8 +116,8 @@ chassis that cannot dissipate the configured envelope, a hot room, and thermal
 paste that has dried out all look identical to a healthy machine from the
 inside.
 
-While the idle overlay watcher is running it records the package temperature
-against the active profile's target, and `status` reports it:
+While the service is running it records the package temperature against the
+active profile's target, and `status` reports it:
 
 ```
 Peak:         94 C since this profile was applied (target 90 C)
@@ -138,13 +144,12 @@ of its own, and a second one fighting it produces oscillation rather than a
 cooler laptop — the same reason the STAPM limit is left to the firmware. This
 measures and reports; the decision stays yours.
 
-The record lives at `/run/elitebook-thermal-profile/thermal` and resets every
-time a profile is applied, so a peak from this morning is never blamed on the
-profile you are running now. The battery reports its charge level every minute
-or so; those reports only reapply the profile when it actually has to change
-(for example when the charge drops to the `battery-saver` threshold), with a
-full reassert at most once an hour, so on battery the record keeps building. It requires the idle watcher: installing with
-`--without-idle-watcher` leaves `status` showing only the current temperature.
+The record lives at `/run/elitebook-thermal-profile/thermal`. It starts over
+only when the base profile changes (for example from `ac` to `battery`), so a
+peak from this morning is never blamed on the profile you are running now.
+Reasserts, idle overlays and battery level reports do not restart it. On
+battery the record keeps building unless the charge crosses the
+`battery-saver` threshold.
 
 Thresholds, if the defaults do not suit your machine:
 
@@ -152,19 +157,55 @@ Thresholds, if the defaults do not suit your machine:
 | --- | --- | --- |
 | `ELITEBOOK_THERMAL_MIN_SAMPLES` | `300` | Samples needed before the guard judges |
 | `ELITEBOOK_THERMAL_OVER_TARGET_PERCENT` | `25` | Share above target that triggers the warning |
-| `ELITEBOOK_THERMAL_WRITE_SAMPLES` | `60` | Samples between routine record writes |
+| `ELITEBOOK_THERMAL_WRITE_SAMPLES` | `60` | Samples between routine record writes (set on the daemon unit) |
 
 ## Environment overrides
 
 A few settings are read from the environment instead, because they belong to
-the unit or the session rather than to a profile:
+the unit or the session rather than to a profile. The unit file sets them for
+the service; the CLI reads them from its own environment when it runs
+`apply-once` (see the note below).
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `ELITEBOOK_LOW_BATTERY_THRESHOLD` | `20` | Battery percentage that triggers `battery-saver` |
-| `ELITEBOOK_FORCE_REAPPLY` | unset | Make a system-auto run reapply even when the profile in force has not changed |
 | `ELITEBOOK_BATTERY_SAVER_MAX_FREQ_KHZ` | `1800000` | Frequency cap used by `battery-saver` |
 | `RYZENADJ` | autodetected | Explicit path to the RyzenAdj binary |
 
-The idle overlay watcher has its own set, documented in the header of
-`src/elitebook-idle-watcher`.
+The service's environment is set in its unit. To change one of these for the
+running daemon, use a drop-in:
+
+```bash
+sudo systemctl edit elitebook-thermal-profile.service
+```
+
+```ini
+[Service]
+Environment=ELITEBOOK_LOW_BATTERY_THRESHOLD=15
+```
+
+Then `sudo systemctl restart elitebook-thermal-profile.service`. Variables
+passed on the `sudo` command line do not reach the daemon, because profile
+commands are sent to it rather than run by the CLI.
+
+### Idle overlay and Steam detection
+
+Both run inside the service. The installer switches them off with these
+variables in a drop-in when you pass `--without-idle-watcher` or
+`--without-steam-watcher`.
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `ELITEBOOK_IDLE_OVERLAY` | `1` | `0` turns the idle overlay off |
+| `ELITEBOOK_STEAM_DETECTION` | `1` | `0` ignores Steam games entirely |
+| `ELITEBOOK_IDLE_SAMPLE_INTERVAL` | `1` | Seconds between samples |
+| `ELITEBOOK_POWER_POLL_INTERVAL` | `60` | Seconds between safety rereads of AC and battery; changes normally arrive as kernel events |
+| `ELITEBOOK_STEAM_WATCH_INTERVAL_ACTIVE` | `20` | Seconds between Steam scans while Steam is open |
+| `ELITEBOOK_STEAM_WATCH_INTERVAL_AC` | `30` | Seconds between Steam scans on AC with Steam closed |
+| `ELITEBOOK_STEAM_WATCH_INTERVAL_BATTERY` | `120` | Seconds between Steam scans on battery with Steam closed |
+
+The idle thresholds (how many quiet samples start soft and deep idle, and the
+busy and load levels that count as quiet or busy) and the values each stage
+asks for are in `IdleSettings` in `src/elitebook_profiles.py`. Each one has an
+`ELITEBOOK_`-prefixed variable with the same name. The defaults are the values
+the separate idle watcher used before it was merged into the service.

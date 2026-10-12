@@ -19,16 +19,25 @@ EOF
 fi
 
 if [ "$1" = "configure" ]; then
+  # Earlier releases shipped separate watcher units. The daemon replaces them,
+  # and the old units would otherwise keep running after the upgrade.
+  systemctl disable --now elitebook-idle-watcher.service elitebook-steam-game-watcher.service >/dev/null 2>&1 || true
+fi
+
+if [ "$1" = "configure" ]; then
   cat <<'EOF'
 elitebook-thermal-profile installed.
 
 Nothing has been enabled. Check that your machine is on the supported hardware
 list, then enable the units explicitly:
   sudo systemctl enable --now elitebook-thermal-profile.service
-  sudo systemctl enable --now elitebook-idle-watcher.service
-  sudo systemctl enable --now elitebook-steam-game-watcher.service
   sudo systemctl enable --now elitebook-power-guard.timer
   sudo systemctl start elitebook-power-guard.service
+
+The daemon also runs the idle overlay and Steam game detection. To switch
+either off, add Environment=ELITEBOOK_IDLE_OVERLAY=0 or
+Environment=ELITEBOOK_STEAM_DETECTION=0 under [Service] in a drop-in for
+elitebook-thermal-profile.service.
 
 Full SMU control needs RyzenAdj, which Debian and Ubuntu do not package.
 Without it, only EPP, boost, and CPU frequency controls apply.

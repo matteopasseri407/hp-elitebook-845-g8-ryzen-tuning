@@ -26,7 +26,11 @@ MASKED_UNITS = (
 
 ENABLED_UNITS = ("elitebook-thermal-profile.service",)
 
-WATCHER_UNITS = (
+DAEMON_UNIT = "elitebook-thermal-profile.service"
+
+# Components of the pre-daemon design. Left running, each would be a second
+# writer of the same power settings, so the guard stops them.
+LEGACY_UNITS = (
     "elitebook-idle-watcher.service",
     "elitebook-steam-game-watcher.service",
 )
@@ -283,66 +287,74 @@ def ensure_enabled_units(mode: str, issues: list[str]) -> int:
     return changed
 
 
-def ensure_watchers_active(mode: str, issues: list[str]) -> int:
+def ensure_legacy_units_stopped(mode: str, issues: list[str]) -> int:
     changed = 0
-    for unit in WATCHER_UNITS:
+    for unit in LEGACY_UNITS:
         if not unit_exists(unit):
             continue
         state = unit_enabled_state(unit)
-        if state != "enabled":
-            if mode == "check":
-                warn(issues, f"{unit} is installed but not enabled")
-            else:
-                try:
-                    res = subprocess.run(
-                        ["systemctl", "enable", unit],
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                        check=False,
-                    )
-                    if res.returncode == 0:
-                        log(f"enabled {unit}")
-                        changed = 1
-                    else:
-                        warn(issues, f"failed to enable {unit}")
-                except OSError:
-                    warn(issues, f"failed to enable {unit}")
-
-        state = unit_active_state(unit)
-        if state == "active":
+        active = unit_active_state(unit)
+        if state not in ("enabled", "enabled-runtime") and active != "active":
             continue
         if mode == "check":
-            warn(issues, f"{unit} is not active")
-        else:
-            try:
-                res = subprocess.run(
-                    ["systemctl", "start", unit],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    check=False,
-                )
-                if res.returncode == 0:
-                    log(f"started {unit}")
-                    changed = 1
-                else:
-                    warn(issues, f"failed to start {unit}")
-            except OSError:
-                warn(issues, f"failed to start {unit}")
+            warn(issues, f"legacy {unit} is still installed and running or enabled")
+            continue
+        try:
+            res = subprocess.run(
+                ["systemctl", "disable", "--now", unit],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            )
+            if res.returncode == 0:
+                log(f"disabled legacy {unit}")
+                changed = 1
+            else:
+                warn(issues, f"failed to disable legacy {unit}")
+        except OSError:
+            warn(issues, f"failed to disable legacy {unit}")
     return changed
+
+
+def ensure_daemon_active(mode: str, issues: list[str]) -> int:
+    if not unit_exists(DAEMON_UNIT):
+        return 0
+    if unit_active_state(DAEMON_UNIT) == "active":
+        return 0
+    if mode == "check":
+        warn(issues, f"{DAEMON_UNIT} is not active")
+        return 0
+    try:
+        res = subprocess.run(
+            ["systemctl", "start", DAEMON_UNIT],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=60,
+            check=False,
+        )
+        if res.returncode == 0:
+            log(f"started {DAEMON_UNIT}")
+            return 1
+    except (OSError, subprocess.SubprocessError):
+        pass
+    warn(issues, f"failed to start {DAEMON_UNIT}")
+    return 0
 
 
 def check_static_files(
     thermal_profile: Path,
-    udev_rule: Path,
-    sleep_hook: Path,
+    legacy_files: tuple[Path, ...],
     issues: list[str],
 ) -> None:
     if not (thermal_profile.is_file() and os.access(thermal_profile, os.X_OK)):
         warn(issues, f"{thermal_profile} is missing or not executable")
-    if not udev_rule.is_file():
-        warn(issues, f"{udev_rule} is missing")
-    if not (sleep_hook.is_file() and os.access(sleep_hook, os.X_OK)):
-        warn(issues, f"{sleep_hook} is missing or not executable")
+    for legacy in legacy_files:
+        if legacy.exists():
+            warn(
+                issues,
+                f"{legacy} is left over from an older version and still triggers "
+                "profile changes; reinstall or remove it",
+            )
     if (
         common.find_ryzenadj(
             "",
@@ -421,26 +433,6 @@ def check_cpufreq_shape(cpufreq_dir: Path, issues: list[str]) -> None:
         )
 
 
-def reload_udev_rules(mode: str, udev_rule: Path, issues: list[str]) -> None:
-    if mode != "repair":
-        return
-    if not udev_rule.is_file():
-        return
-    try:
-        res = subprocess.run(
-            ["udevadm", "control", "--reload-rules"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            check=False,
-        )
-        if res.returncode == 0:
-            log("reloaded udev rules")
-        else:
-            warn(issues, "failed to reload udev rules")
-    except OSError:
-        warn(issues, "failed to reload udev rules")
-
-
 def apply_sysfs_fallback(
     power_supply_dir: Path,
     cpufreq_dir: Path,
@@ -494,41 +486,33 @@ def apply_auto_profile(
     state_dir: Path,
     issues: list[str],
 ) -> None:
+    """Have the daemon rewrite every setting, or fall back to plain sysfs."""
     if mode != "repair":
         return
-
-    if unit_exists("elitebook-thermal-profile.service"):
+    if (
+        unit_active_state(DAEMON_UNIT) == "active"
+        and thermal_profile.is_file()
+        and os.access(thermal_profile, os.X_OK)
+    ):
         try:
             res = subprocess.run(
-                ["systemctl", "start", "elitebook-thermal-profile.service"],
+                [str(thermal_profile), "reassert"],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 timeout=60,
                 check=False,
             )
             if res.returncode == 0:
-                log("reapplied elitebook-thermal-profile.service")
-                return
-        except (OSError, subprocess.SubprocessError):
-            pass
-    elif thermal_profile.is_file() and os.access(thermal_profile, os.X_OK):
-        env = dict(os.environ)
-        env["ELITEBOOK_PROFILE_SOURCE"] = "system-auto"
-        try:
-            res = subprocess.run(
-                [str(thermal_profile), "auto"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                timeout=60,
-                env=env,
-                check=False,
-            )
-            if res.returncode == 0:
-                log("reapplied elitebook thermal profile directly")
+                log("asked the daemon to reassert the thermal profile")
                 return
         except (OSError, subprocess.SubprocessError):
             pass
 
+    if unit_active_state(DAEMON_UNIT) == "active":
+        # The daemon is running but did not answer. Writing sysfs behind its
+        # back would make a second writer; report it and let it recover.
+        warn(issues, "the thermal profile daemon did not answer a reassert request")
+        return
     warn(issues, "failed to reapply the EliteBook thermal profile")
     apply_sysfs_fallback(power_supply_dir, cpufreq_dir, state_dir, issues)
 
@@ -622,8 +606,10 @@ def main(argv: list[str] | None = None) -> int:
             "ELITEBOOK_THERMAL_PROFILE_BIN", "/usr/local/sbin/elitebook-thermal-profile"
         )
     )
-    udev_rule = Path("/etc/udev/rules.d/90-elitebook-thermal-profile.rules")
-    sleep_hook = Path("/etc/systemd/system-sleep/elitebook-thermal-profile")
+    legacy_files = (
+        Path("/etc/udev/rules.d/90-elitebook-thermal-profile.rules"),
+        Path("/etc/systemd/system-sleep/elitebook-thermal-profile"),
+    )
     backend_conf = Path(
         os.environ.get(
             "ELITEBOOK_BACKEND_CONF", "/etc/elitebook-thermal-profile/backend.conf"
@@ -642,16 +628,16 @@ def main(argv: list[str] | None = None) -> int:
     changed += ensure_masked_units(mode, issues)
     changed += ensure_power_backend(mode, backend_conf, os_release, issues)
     changed += ensure_enabled_units(mode, issues)
-    check_static_files(thermal_profile, udev_rule, sleep_hook, issues)
+    changed += ensure_legacy_units_stopped(mode, issues)
+    check_static_files(thermal_profile, legacy_files, issues)
     check_hardware_guard(thermal_profile, issues)
     check_cpufreq_shape(cpufreq_dir, issues)
-    reload_udev_rules(mode, udev_rule, issues)
+    changed += ensure_daemon_active(mode, issues)
     apply_auto_profile(
         mode, thermal_profile, power_supply_dir, cpufreq_dir, state_dir, issues
     )
     check_smu_state(state_dir, issues)
     check_thermal_headroom(state_dir, min_samples, over_target_percent, issues)
-    changed += ensure_watchers_active(mode, issues)
 
     status = "degraded" if issues else "ok"
     write_guard_state(status, mode, issues, changed, state_dir, guard_state_file)

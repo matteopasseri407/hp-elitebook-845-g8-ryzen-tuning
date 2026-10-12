@@ -79,22 +79,20 @@ jobs:
           ruff check \
             src/elitebook-thermal-profile \
             src/elitebook_common.py \
-            src/elitebook-idle-watcher \
-            src/elitebook-steam-game-watcher \
+            src/elitebook_profiles.py \
+            src/elitebook_engine.py \
             src/elitebook-power-guard \
             src/elitebook-hibernate-preflight \
-            system-sleep/elitebook-thermal-profile \
             tests
       - name: Format check
         run: |
           ruff format --check \
             src/elitebook-thermal-profile \
             src/elitebook_common.py \
-            src/elitebook-idle-watcher \
-            src/elitebook-steam-game-watcher \
+            src/elitebook_profiles.py \
+            src/elitebook_engine.py \
             src/elitebook-power-guard \
             src/elitebook-hibernate-preflight \
-            system-sleep/elitebook-thermal-profile \
             tests
 
   python-syntax:
@@ -112,13 +110,10 @@ jobs:
           python3 -m py_compile \
             src/elitebook-thermal-profile \
             src/elitebook_common.py \
-            src/elitebook-idle-watcher \
-            src/elitebook-steam-game-watcher \
+            src/elitebook_profiles.py \
+            src/elitebook_engine.py \
             src/elitebook-power-guard \
             src/elitebook-hibernate-preflight \
-            system-sleep/elitebook-thermal-profile \
-            tests/test_idle_watcher.py \
-            tests/test_steam_game_watcher.py \
             tests/test_power_guard.py \
             tests/test_hibernate_preflight.py
       - name: Typecheck Python sources
@@ -126,12 +121,9 @@ jobs:
           mypy --strict --scripts-are-modules \
             src/elitebook-thermal-profile \
             src/elitebook_common.py \
-            src/elitebook-idle-watcher \
-            src/elitebook-steam-game-watcher \
+            src/elitebook_profiles.py \
+            src/elitebook_engine.py \
             src/elitebook-power-guard \
             src/elitebook-hibernate-preflight
-          # The sleep hook shares its filename with the dispatcher, so it is
-          # typechecked on its own to avoid a duplicate module name.
-          mypy --strict system-sleep/elitebook-thermal-profile
       - name: Run unit tests
         run: pytest -q

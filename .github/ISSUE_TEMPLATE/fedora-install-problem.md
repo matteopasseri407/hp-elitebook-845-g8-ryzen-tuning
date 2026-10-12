@@ -40,8 +40,6 @@ cat /sys/kernel/security/lockdown
 
 ```text
 systemctl status elitebook-thermal-profile.service
-systemctl status elitebook-idle-watcher.service
-systemctl status elitebook-steam-game-watcher.service
 systemctl status elitebook-power-guard.timer
 cat /run/elitebook-thermal-profile/current
 cat /run/elitebook-thermal-profile/guard

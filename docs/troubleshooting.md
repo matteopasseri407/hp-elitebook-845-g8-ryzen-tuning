@@ -2,13 +2,24 @@
 
 ## RyzenAdj Not Found
 
-Install RyzenAdj or set the path explicitly:
+Install RyzenAdj or point the service at it explicitly:
 
 ```bash
 sudo dnf copr enable matteo407/elitebook-thermal-profile
 sudo dnf install ryzenadj
-sudo RYZENADJ=/path/to/ryzenadj elitebook-thermal-profile ac
+sudo systemctl edit elitebook-thermal-profile.service
 ```
+
+In the editor that opens, add:
+
+```ini
+[Service]
+Environment=RYZENADJ=/path/to/ryzenadj
+```
+
+Then restart the service with `sudo systemctl restart elitebook-thermal-profile.service`.
+The daemon is the process that calls RyzenAdj, so the variable has to be set
+for the service, not on the command line of a profile command.
 
 The script searches:
 
@@ -58,8 +69,8 @@ sudo ryzenadj -i | grep "STT LIMIT APU"
 
 A non-zero STT limit means `--stapm-limit` writes will not stick. Measured on
 the 845 G8: a STAPM write of 18 W reads back as 30 W (the fast limit) in under
-half a second, so periodic re-assert loops are pointless and this stack does
-not attempt them.
+half a second. The service does not run a re-assert loop for STAPM. Its
+hourly full rewrite includes STAPM too, but that write does not last either.
 
 This does not weaken the profiles. Sustained package power is governed by the
 slow limit, which STT does not touch; the configured STAPM stage simply does
@@ -83,11 +94,21 @@ cat /sys/class/dmi/id/product_name
 grep -m1 'model name' /proc/cpuinfo
 ```
 
-To override the guard:
+The service checks the hardware when it starts and refuses to run on
+unsupported machines. To override the guard, set the variable for the service:
 
 ```bash
-sudo ELITEBOOK_THERMAL_FORCE=1 elitebook-thermal-profile ac
+sudo systemctl edit elitebook-thermal-profile.service
 ```
+
+```ini
+[Service]
+Environment=ELITEBOOK_THERMAL_FORCE=1
+```
+
+Then restart the service. For a single test run without the service, use
+`sudo ELITEBOOK_THERMAL_FORCE=1 elitebook-thermal-profile apply-once ac`
+(this needs the service to be stopped).
 
 ## GNOME Extension Does Not Appear
 
@@ -124,43 +145,48 @@ If you want the EliteBook profile service to be the only power policy surface:
 sudo systemctl mask --now tuned-ppd.service
 ```
 
-Keep `tuned.service` running. The EliteBook profile script still asks
+Keep `tuned.service` running. The daemon still asks
 `tuned-adm` for the matching Fedora tuned profile, but that call is
 best-effort and has a 10 second timeout. If `tuned-adm` warns or hangs,
-the script continues with the direct EPP, boost, frequency, and RyzenAdj
+the daemon continues with the direct EPP, boost, frequency, and RyzenAdj
 policy so the laptop does not stay in a half-applied power state.
 
 ## GNOME Button Asks For A Password
 
 That is expected. The extension uses `pkexec` to run the profile switcher as root. This repository does not install a passwordless polkit rule by default.
 
-## Steam Watcher Does Not Switch To Gaming
+## Steam Game Does Not Switch To Gaming
 
-Run one scan manually:
-
-```bash
-sudo elitebook-steam-game-watcher once
-```
-
-Then check:
+Check what the service has seen:
 
 ```bash
-systemctl status elitebook-steam-game-watcher.service
-cat /run/elitebook-thermal-profile/current
-cat /run/elitebook-thermal-profile/steam-game-watcher
+elitebook-thermal-profile status
+grep source= /run/elitebook-thermal-profile/current
+journalctl -u elitebook-thermal-profile.service -n 50
 ```
 
-The watcher detects Steam game processes by reading process environment variables such as `SteamGameId`, `SteamAppId`, and `STEAM_COMPAT_APP_ID` from descendants of the Steam process. It intentionally does not switch just because the Steam client is open.
+A game shows up as `source=steam-game-watcher` in the state file. The name is
+kept from the earlier separate watcher because the GNOME indicator matches on
+it. The journal logs `Steam game detected` when a game is found and `Steam game
+ended` when it stops.
+
+The daemon detects games by reading process environment variables such as `SteamGameId`, `SteamAppId`, and `STEAM_COMPAT_APP_ID` from descendants of the Steam process. It scans every 20 seconds while Steam is open, and every 30 seconds on AC or every 120 seconds on battery while Steam is closed, so a game can take that long to be noticed. It intentionally does not switch just because the Steam client is open.
+
+If Steam detection is switched off, the service never switches to `gaming`.
+Check the drop-in for `ELITEBOOK_STEAM_DETECTION=0`, which the installer writes
+when it is run with `--without-steam-watcher`.
 
 ## Manual Profile Does Not Change Automatically
 
-This is by design. Manual profile selections win until you run:
+This is by design. A manual profile choice (for example `sudo elitebook-thermal-profile cool`) wins until you run:
 
 ```bash
 sudo elitebook-thermal-profile auto
 ```
 
-The exception is low-battery protection. If the battery is at or below the configured threshold, system automation can override manual or Steam-driven profiles and apply `battery-saver`.
+A manual choice survives a restart of the service, but not a reboot.
+
+The exception is low-battery protection. If the battery is at or below the configured threshold, the service overrides the manual choice and any Steam-driven profile, applies `battery-saver`, and clears the manual choice.
 
 ## The profile applies but temperatures do not change
 
@@ -173,8 +199,8 @@ grep smu= /run/elitebook-thermal-profile/current
 - `smu=ok` — the limits were applied. If temperatures are still high, the
   profile values themselves are the thing to look at.
 - `smu=unavailable` — RyzenAdj is not installed. Only EPP, boost, and the
-  frequency cap are active. Install RyzenAdj, or point the dispatcher at it
-  with `RYZENADJ=/path/to/ryzenadj`.
+  frequency cap are active. Install RyzenAdj, or point the service at it with
+  `RYZENADJ` (see [RyzenAdj Not Found](#ryzenadj-not-found)).
 - `smu=blocked` — kernel lockdown refused the write, which Secure Boot
   normally enables. Confirm with `cat /sys/kernel/security/lockdown`; anything
   other than `[none]` blocks the `/dev/mem` path RyzenAdj falls back to.
@@ -182,6 +208,9 @@ grep smu= /run/elitebook-thermal-profile/current
   [ubuntu.md](ubuntu.md) for the alternatives.
 - `smu=failed` — RyzenAdj ran and returned an error with lockdown off. Run it
   by hand to see why: `sudo ryzenadj -i`.
+
+For the last two states the service retries the SMU write every five minutes,
+so a fixed cause takes effect without a restart.
 
 In the last three cases the `stapm_mw`, `fast_mw`, `slow_mw`, `apu_mw`, and
 `tctl_c` values in the state file record what was requested, not what the

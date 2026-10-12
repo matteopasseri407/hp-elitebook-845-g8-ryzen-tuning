@@ -113,8 +113,8 @@ def battery_capacity(power_supply_dir: Path) -> int | None:
     return int(raw)
 
 
-def cpu_temperature_c(hwmon_dir: Path) -> int | None:
-    """CPU package temperature in whole degrees, or None if no sensor answers.
+def find_temperature_input(hwmon_dir: Path) -> Path | None:
+    """The CPU package temperature file, or None if no known sensor exists.
 
     k10temp is the in-tree driver; zenpower is a common out-of-tree
     replacement, and a machine running that one has no k10temp at all.
@@ -127,11 +127,21 @@ def cpu_temperature_c(hwmon_dir: Path) -> int | None:
         for hwmon in hwmons:
             if read_trimmed(hwmon / "name") != wanted:
                 continue
-            raw = read_trimmed(hwmon / "temp1_input")
-            if not is_uint(raw):
-                continue
-            return int(raw) // 1000
+            candidate = hwmon / "temp1_input"
+            if is_uint(read_trimmed(candidate)):
+                return candidate
     return None
+
+
+def read_temperature_c(temp_input: Path) -> int | None:
+    raw = read_trimmed(temp_input)
+    return int(raw) // 1000 if is_uint(raw) else None
+
+
+def cpu_temperature_c(hwmon_dir: Path) -> int | None:
+    """CPU package temperature in whole degrees, or None if no sensor answers."""
+    found = find_temperature_input(hwmon_dir)
+    return None if found is None else read_temperature_c(found)
 
 
 def find_ryzenadj(configured: str, search_paths: list[str]) -> str | None:

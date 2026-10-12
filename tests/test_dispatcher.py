@@ -123,7 +123,7 @@ class DispatcherExtrasTests(unittest.TestCase):
         return json.loads(proc.stdout)
 
     def test_status_json_reports_applied_profile(self) -> None:
-        proc = _run(self.env, "cool")
+        proc = _run(self.env, "apply-once", "cool")
         self.assertEqual(proc.returncode, 0, msg=proc.stderr)
 
         payload = self._status_json()
@@ -139,7 +139,7 @@ class DispatcherExtrasTests(unittest.TestCase):
         self.assertIn("error", json.loads(proc.stdout))
 
     def test_reapply_does_not_rewrite_identical_sysfs(self) -> None:
-        proc = _run(self.env, "cool")
+        proc = _run(self.env, "apply-once", "cool")
         self.assertEqual(proc.returncode, 0, msg=proc.stderr)
 
         watched = [
@@ -149,7 +149,7 @@ class DispatcherExtrasTests(unittest.TestCase):
         ]
         before = [path.stat().st_mtime_ns for path in watched]
 
-        proc = _run(self.env, "cool")
+        proc = _run(self.env, "apply-once", "cool")
         self.assertEqual(proc.returncode, 0, msg=proc.stderr)
         after = [path.stat().st_mtime_ns for path in watched]
 
@@ -164,14 +164,14 @@ class DispatcherExtrasTests(unittest.TestCase):
         )
         self.env["ELITEBOOK_PROFILE_CONF"] = str(conf)
 
-        proc = _run(self.env, "ac")
+        proc = _run(self.env, "apply-once", "ac")
         self.assertEqual(proc.returncode, 0, msg=proc.stderr)
         self.assertIn("line 3", proc.stderr)
         self.assertIn("outside the safe range", proc.stderr)
         self.assertEqual(_state_value(self.root, "slow_mw"), "18000")
 
     def test_status_json_reports_battery_defaults(self) -> None:
-        proc = _run(self.env, "battery")
+        proc = _run(self.env, "apply-once", "battery")
         self.assertEqual(proc.returncode, 0, msg=proc.stderr)
 
         payload = self._status_json()
@@ -191,7 +191,7 @@ class DispatcherExtrasTests(unittest.TestCase):
         )
         self.env["ELITEBOOK_PROFILE_CONF"] = str(conf)
 
-        proc = _run(self.env, "battery")
+        proc = _run(self.env, "apply-once", "battery")
         self.assertEqual(proc.returncode, 0, msg=proc.stderr)
 
         payload = self._status_json()
@@ -209,13 +209,12 @@ if __name__ == "__main__":
 
 @unittest.skipIf(NEEDS_ROOT, "needs root or passwordless sudo")
 class SystemAutoDeviceTests(unittest.TestCase):
-    """System auto on battery: skip no-op reapplies, manage idle devices."""
+    """Automatic choice on battery: low battery guard and idle devices."""
 
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
         self.root = Path(self._tmp.name)
         self.env = _write_fixture(self.root)
-        self.env["ELITEBOOK_PROFILE_SOURCE"] = "system-auto"
         supplies = self.root / "power-supply"
         (supplies / "AC").mkdir()
         (supplies / "AC" / "type").write_text("Mains\n", encoding="utf-8")
@@ -250,43 +249,19 @@ class SystemAutoDeviceTests(unittest.TestCase):
         path = self.root / "pci" / "0000:04:00.3" / "power" / "control"
         return path.read_text(encoding="utf-8").strip()
 
-    def _state_mtime(self) -> int:
-        return (self.root / "state" / "current").stat().st_mtime_ns
-
-    def test_battery_event_with_nothing_changed_is_skipped(self) -> None:
-        proc = _run(self.env, "auto")
-        self.assertEqual(proc.returncode, 0, msg=proc.stderr)
-        self.assertEqual(_state_value(self.root, "profile"), "battery")
-        before = self._state_mtime()
-
-        proc = _run(self.env, "auto")
-        self.assertEqual(proc.returncode, 0, msg=proc.stderr)
-        self.assertIn("already in force", proc.stdout)
-        self.assertEqual(before, self._state_mtime())
-
-    def test_force_reapply_ignores_the_shortcut(self) -> None:
-        self.assertEqual(_run(self.env, "auto").returncode, 0)
-        before = self._state_mtime()
-
-        self.env["ELITEBOOK_FORCE_REAPPLY"] = "1"
-        proc = _run(self.env, "auto")
-        self.assertEqual(proc.returncode, 0, msg=proc.stderr)
-        self.assertNotIn("already in force", proc.stdout)
-        self.assertNotEqual(before, self._state_mtime())
-
     def test_low_battery_still_switches_profile(self) -> None:
-        self.assertEqual(_run(self.env, "auto").returncode, 0)
+        self.assertEqual(_run(self.env, "apply-once", "auto").returncode, 0)
         (self.root / "power-supply" / "BAT0" / "capacity").write_text(
             "15\n", encoding="utf-8"
         )
 
-        proc = _run(self.env, "auto")
+        proc = _run(self.env, "apply-once", "auto")
         self.assertEqual(proc.returncode, 0, msg=proc.stderr)
         self.assertEqual(_state_value(self.root, "profile"), "battery-saver")
         self.assertEqual(self.panel.read_text(encoding="utf-8").strip(), "3")
 
     def test_battery_powers_devices_down_and_ac_restores_them(self) -> None:
-        self.assertEqual(_run(self.env, "auto").returncode, 0)
+        self.assertEqual(_run(self.env, "apply-once", "auto").returncode, 0)
         self.assertEqual(self._xhci_control(), "auto")
         self.assertEqual(self.panel.read_text(encoding="utf-8").strip(), "1")
         self.assertEqual(_state_value(self.root, "runtime_pm"), "auto")
@@ -295,7 +270,7 @@ class SystemAutoDeviceTests(unittest.TestCase):
         (self.root / "power-supply" / "AC" / "online").write_text(
             "1\n", encoding="utf-8"
         )
-        proc = _run(self.env, "auto")
+        proc = _run(self.env, "apply-once", "auto")
         self.assertEqual(proc.returncode, 0, msg=proc.stderr)
         self.assertEqual(_state_value(self.root, "profile"), "ac")
         self.assertEqual(self._xhci_control(), "on")
@@ -310,7 +285,7 @@ class SystemAutoDeviceTests(unittest.TestCase):
         )
         self.env["ELITEBOOK_PROFILE_CONF"] = str(conf)
 
-        proc = _run(self.env, "auto")
+        proc = _run(self.env, "apply-once", "auto")
         self.assertEqual(proc.returncode, 0, msg=proc.stderr)
         self.assertEqual(self._xhci_control(), "on")
         self.assertEqual(self.panel.read_text(encoding="utf-8").strip(), "0")

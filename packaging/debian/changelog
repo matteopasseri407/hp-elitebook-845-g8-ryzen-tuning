@@ -1,3 +1,19 @@
+elitebook-thermal-profile (0.10.0) unstable; urgency=medium
+
+  * Replace the oneshot dispatcher, the udev rule, the sleep hook, the idle
+    watcher and the Steam watcher with one daemon that is the only writer of
+    power settings. It reconciles to a target and writes only what changed,
+    rewrites everything hourly and after a resume, and rereads profiles.conf
+    on its own. Profile commands reach it over a root-only socket.
+  * Battery level updates no longer reapply the profile every minute, so the
+    thermal record keeps building on battery and the idle overlay is no longer
+    briefly overridden.
+  * Add RUNTIME_PM and PANEL_POWER_SAVINGS profile keys: on battery, idle PCI
+    devices may power down and the panel uses amdgpu power saving.
+  * New commands: reassert, daemon, apply-once. status shows the idle stage.
+
+ -- Matteo Passeri <matteopasseri407@users.noreply.github.com>  Mon, 12 Oct 2026 12:00:00 +0200
+
 elitebook-thermal-profile (0.9.0) unstable; urgency=medium
 
   * Protect against battery brownouts and transient voltage droops under heavy

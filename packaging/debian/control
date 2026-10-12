@@ -11,15 +11,15 @@ Package: elitebook-thermal-profile
 Architecture: all
 Depends: ${misc:Depends},
          python3,
-         systemd,
-         udev
+         systemd
 Recommends: ryzenadj (>= 0.17.0)
 Suggests: gnome-shell-extension-elitebook-thermal-profile
 Description: thermal and power profiles for HP AMD Cezanne laptops
  User-space thermal and power profile integration for selected HP EliteBook and
- ProBook AMD Cezanne laptops. It combines AMD P-State EPP, CPU frequency policy,
- systemd units, udev rules, and RyzenAdj-driven SMU limits into a profile
- dispatcher with idle, AC/battery, update guard, and Steam game automation.
+ ProBook AMD Cezanne laptops. A single daemon combines AMD P-State EPP, CPU
+ frequency policy and RyzenAdj-driven SMU limits, and follows AC/battery, low
+ battery, idle time, Steam games and resume from sleep. An update guard timer
+ keeps conflicting power daemons masked.
  .
  Full SMU control requires a RyzenAdj binary, which Debian and Ubuntu do not
  package. Without it the profiles degrade to kernel EPP, boost, and frequency

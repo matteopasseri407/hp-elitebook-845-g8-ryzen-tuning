@@ -26,7 +26,6 @@ What did you expect?
 
 ```text
 systemctl status elitebook-thermal-profile.service
-systemctl status elitebook-steam-game-watcher.service
 cat /run/elitebook-thermal-profile/current
 ```
 

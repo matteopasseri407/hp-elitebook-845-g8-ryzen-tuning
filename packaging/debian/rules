@@ -13,60 +13,48 @@ GNOME_PKG = debian/gnome-shell-extension-elitebook-thermal-profile
 
 BINDIR = /usr/bin
 UNITDIR = /usr/lib/systemd/system
-UDEVDIR = /usr/lib/udev/rules.d
-SLEEPDIR = /usr/lib/systemd/system-sleep
 EXTDIR = /usr/share/gnome-shell/extensions
 
 %:
 	dh $@
 
-# Nothing to compile: shell scripts, Python watchers, and GNOME Shell files.
+# Nothing to compile: shell scripts, Python modules, and GNOME Shell files.
 override_dh_auto_build:
 
 override_dh_auto_test:
 	python3 -m py_compile \
 		src/elitebook-thermal-profile \
 		src/elitebook_common.py \
-		src/elitebook-idle-watcher \
-		src/elitebook-steam-game-watcher \
-		src/elitebook-power-guard \
-		system-sleep/elitebook-thermal-profile
+		src/elitebook_profiles.py \
+		src/elitebook_engine.py \
+		src/elitebook-power-guard
 
 override_dh_auto_install:
 	# The hibernate preflight is intentionally absent: it inspects Fedora-style
 	# boot entries with grubby and checks an SELinux label.
 	install -D -m 0755 src/elitebook-thermal-profile $(PKG)$(BINDIR)/elitebook-thermal-profile
 	install -D -m 0644 src/elitebook_common.py $(PKG)$(BINDIR)/elitebook_common.py
-	install -D -m 0755 src/elitebook-idle-watcher $(PKG)$(BINDIR)/elitebook-idle-watcher
+	install -D -m 0644 src/elitebook_profiles.py $(PKG)$(BINDIR)/elitebook_profiles.py
+	install -D -m 0644 src/elitebook_engine.py $(PKG)$(BINDIR)/elitebook_engine.py
 	install -D -m 0755 src/elitebook-power-guard $(PKG)$(BINDIR)/elitebook-power-guard
-	install -D -m 0755 src/elitebook-steam-game-watcher $(PKG)$(BINDIR)/elitebook-steam-game-watcher
 
 	install -D -m 0644 systemd/elitebook-thermal-profile.service $(PKG)$(UNITDIR)/elitebook-thermal-profile.service
-	install -D -m 0644 systemd/elitebook-idle-watcher.service $(PKG)$(UNITDIR)/elitebook-idle-watcher.service
-	install -D -m 0644 systemd/elitebook-steam-game-watcher.service $(PKG)$(UNITDIR)/elitebook-steam-game-watcher.service
 	install -D -m 0644 systemd/elitebook-power-guard.service $(PKG)$(UNITDIR)/elitebook-power-guard.service
 	install -D -m 0644 systemd/elitebook-power-guard.timer $(PKG)$(UNITDIR)/elitebook-power-guard.timer
-
-	install -D -m 0644 udev/90-elitebook-thermal-profile.rules $(PKG)$(UDEVDIR)/90-elitebook-thermal-profile.rules
 
 	# Profile overrides ship fully commented out, so the file does nothing
 	# until edited. Anything under /etc becomes a dpkg conffile, so those
 	# edits survive upgrades, which is the point of shipping it.
 	install -D -m 0644 config/profiles.conf.example $(PKG)/etc/elitebook-thermal-profile/profiles.conf
-	install -D -m 0755 system-sleep/elitebook-thermal-profile $(PKG)$(SLEEPDIR)/elitebook-thermal-profile
 
 	install -d $(GNOME_PKG)$(EXTDIR)
 	cp -a gnome-extension/$(EXTENSION_UUID) $(GNOME_PKG)$(EXTDIR)/
 
 	# Rewrite the source-installer paths baked into units and helper scripts.
 	sed -i -e 's#/usr/local/sbin#$(BINDIR)#g' \
-		$(PKG)$(UNITDIR)/elitebook-*.service \
-		$(PKG)$(SLEEPDIR)/elitebook-thermal-profile
+		$(PKG)$(UNITDIR)/elitebook-*.service
 	sed -i -e 's#/usr/local/sbin#$(BINDIR)#g' \
-		-e 's#/etc/udev/rules.d/90-elitebook-thermal-profile.rules#$(UDEVDIR)/90-elitebook-thermal-profile.rules#g' \
-		-e 's#/etc/systemd/system-sleep/elitebook-thermal-profile#$(SLEEPDIR)/elitebook-thermal-profile#g' \
-		$(PKG)$(BINDIR)/elitebook-power-guard \
-		$(PKG)$(BINDIR)/elitebook-steam-game-watcher
+		$(PKG)$(BINDIR)/elitebook-power-guard
 	sed -i -e 's#/usr/local/sbin/elitebook-thermal-profile#$(BINDIR)/elitebook-thermal-profile#g' \
 		$(GNOME_PKG)$(EXTDIR)/$(EXTENSION_UUID)/extension.js
 

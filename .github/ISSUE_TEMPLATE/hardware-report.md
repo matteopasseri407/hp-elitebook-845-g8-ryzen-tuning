@@ -38,8 +38,8 @@ is much more useful than "normal use".
 
 - Profile applied (`ac` / `performance` / `battery` / `battery-saver` /
   `gaming` / `cool` / `auto`):
-- Idle overlay watcher enabled (yes / no):
-- Steam game watcher enabled (yes / no):
+- Idle overlay enabled (yes / no):
+- Steam game detection enabled (yes / no):
 - Manual override or automation source (`manual` / `auto` /
   `system-auto` / `steam-game-watcher`):
 

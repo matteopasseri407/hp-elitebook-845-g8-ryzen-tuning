@@ -37,29 +37,26 @@ shellcheck scripts/*.sh tests/*.sh
 ruff check \
   src/elitebook-thermal-profile \
   src/elitebook_common.py \
-  src/elitebook-idle-watcher \
-  src/elitebook-steam-game-watcher \
+  src/elitebook_profiles.py \
+  src/elitebook_engine.py \
   src/elitebook-power-guard \
   src/elitebook-hibernate-preflight \
-  system-sleep/elitebook-thermal-profile \
   tests
 ruff format --check \
   src/elitebook-thermal-profile \
   src/elitebook_common.py \
-  src/elitebook-idle-watcher \
-  src/elitebook-steam-game-watcher \
+  src/elitebook_profiles.py \
+  src/elitebook_engine.py \
   src/elitebook-power-guard \
   src/elitebook-hibernate-preflight \
-  system-sleep/elitebook-thermal-profile \
   tests
 mypy --strict --scripts-are-modules \
   src/elitebook-thermal-profile \
   src/elitebook_common.py \
-  src/elitebook-idle-watcher \
-  src/elitebook-steam-game-watcher \
+  src/elitebook_profiles.py \
+  src/elitebook_engine.py \
   src/elitebook-power-guard \
   src/elitebook-hibernate-preflight
-mypy --strict system-sleep/elitebook-thermal-profile
 ```
 
 ## Privacy
