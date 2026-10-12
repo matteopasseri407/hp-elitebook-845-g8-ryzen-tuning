@@ -38,6 +38,10 @@ from elitebook_profiles import CpuPolicy, Profile, ProfileConfig, SmuLimits, Tar
 REASSERT_INTERVAL_S = 3600.0
 RESUME_FOLLOWUP_S = 10.0
 SMU_RETRY_S = 300.0
+# How often the CPU policy is read back to catch changes made behind the
+# daemon's back (another tool, firmware, a stuck driver).
+DRIFT_CHECK_S = 30.0
+DRIVER_RESET_INTERVAL_S = 3600.0
 # Percentage points the battery must climb back above the low battery
 # threshold before battery-saver lets go: estimated capacity jitters by a
 # point under changing load, and each flip would switch profiles.
@@ -246,6 +250,10 @@ class Hardware(typing.Protocol):
 
     def apply_devices(self, runtime_pm: str, panel: int) -> tuple[str, list[str]]: ...
 
+    def read_cpu(self) -> CpuPolicy | None: ...
+
+    def reset_cpufreq_driver(self) -> bool: ...
+
 
 _EDC_LIMIT_RE = re.compile(r"^\|\s*EDC LIMIT VDD\s*\|\s*([0-9.]+)\s*\|", re.MULTILINE)
 
@@ -290,6 +298,79 @@ class SysfsHardware:
     ryzenadj: str | None
     stock_vrmmax_ma: int | None = None
     tuned_active_profile: Path = Path("/etc/tuned/active_profile")
+    # Derived from cpufreq_dir so a test pointing at a fixture tree can never
+    # reach the real driver.
+    amd_pstate_status: Path | None = None
+
+    def __post_init__(self) -> None:
+        if self.amd_pstate_status is None:
+            self.amd_pstate_status = self.cpufreq_dir.parent / "amd_pstate" / "status"
+
+    def read_cpu(self) -> CpuPolicy | None:
+        """What the first cpufreq policy actually holds, or None if unreadable.
+
+        A maximum within 2% of the hardware maximum reads as uncapped.
+        """
+        policy = self.cpufreq_dir / "policy0"
+        epp = common.read_trimmed(policy / "energy_performance_preference")
+        current = common.read_trimmed(policy / "scaling_max_freq")
+        hardware_max = common.read_trimmed(policy / "cpuinfo_max_freq")
+        if not epp or not current.isdecimal() or not hardware_max.isdecimal():
+            return None
+        boost_raw = common.read_trimmed(self.cpufreq_dir / "boost")
+        if boost_raw not in ("0", "1"):
+            # Without a boost switch there is nothing reliable to compare.
+            return None
+        boost = boost_raw == "1"
+        max_khz: int | None = int(current)
+        if int(current) >= int(hardware_max) * 0.98:
+            max_khz = None
+        return CpuPolicy(epp, boost, max_khz)
+
+    def disable_dynamic_epp(self) -> bool:
+        """Turn off amd-pstate dynamic EPP where the kernel offers it.
+
+        Newer kernels can switch EPP on their own when the power source
+        changes. The daemon owns EPP, and two owners would rewrite each other
+        every drift check. True when it was on and is now off.
+        """
+        if self.amd_pstate_status is None:
+            return False
+        knob = self.amd_pstate_status.parent / "dynamic_epp"
+        value = common.read_trimmed(knob)
+        off = {"enabled": "disabled", "1": "0"}.get(value)
+        if off is None:
+            return False
+        try:
+            knob.write_text(off + "\n", encoding="utf-8")
+        except OSError:
+            return False
+        return True
+
+    def reset_cpufreq_driver(self) -> bool:
+        """Re-register amd-pstate (passive, then active).
+
+        amd-pstate on kernel 7.0 has been seen holding scaling_max_freq at the
+        nominal clock while boost is on and higher writes are accepted but
+        ignored; re-registering the driver clears it. Only done from active
+        mode, and the caller rewrites the CPU policy right after.
+        """
+        status = self.amd_pstate_status
+        if status is None or common.read_trimmed(status) != "active":
+            return False
+        try:
+            status.write_text("passive\n", encoding="utf-8")
+        except OSError:
+            return False
+        try:
+            status.write_text("active\n", encoding="utf-8")
+        except OSError:
+            # Never leave the driver in passive mode if it can be helped.
+            try:
+                status.write_text("active\n", encoding="utf-8")
+            except OSError:
+                return False
+        return common.read_trimmed(status) == "active"
 
     def apply_tuned(self, tuned_profile: str) -> list[str]:
         # Fedora drives part of the policy through tuned; elsewhere this is a
@@ -542,6 +623,9 @@ class Engine:
         self._resolved: dict[str, Profile] = {}
         self._saver_latched = False
         self._written_vrmmax: int | None | str = "unset"
+        self.next_drift_check = 0.0
+        self.next_driver_reset = 0.0
+        self.next_drift_log = 0.0
 
     # Inputs that do not arrive with every tick.
 
@@ -663,6 +747,7 @@ class Engine:
                 self.log.warn(warning)
 
         self.applied = target
+        self._check_drift(now)
         if reassert:
             self.next_reassert = now + REASSERT_INTERVAL_S
             if self.followup is not None and now >= self.followup:
@@ -694,6 +779,64 @@ class Engine:
         if stage != self.stage or (base_changed and stage != profiles.IDLE_NONE):
             self._write_idle(stage, profile, source, facts, target)
             self.stage = stage
+
+    @staticmethod
+    def _cpu_matches(actual: CpuPolicy, wanted: CpuPolicy) -> bool:
+        if actual.epp != wanted.epp or actual.boost != wanted.boost:
+            return False
+        if wanted.max_freq_khz is None:
+            return actual.max_freq_khz is None
+        if actual.max_freq_khz is None:
+            return False
+        # amd-pstate rounds a requested cap to a performance step.
+        return abs(actual.max_freq_khz - wanted.max_freq_khz) <= (
+            wanted.max_freq_khz * 0.06
+        )
+
+    def _check_drift(self, now: float) -> None:
+        """Read the CPU policy back and repair it if it is not what was set."""
+        if now < self.next_drift_check or self.applied is None:
+            return
+        self.next_drift_check = now + DRIFT_CHECK_S
+        wanted = self.applied.cpu
+        actual = self.hardware.read_cpu()
+        if actual is None or self._cpu_matches(actual, wanted):
+            return
+        if now >= self.next_drift_log:
+            # Something that keeps fighting the daemon is fixed every check
+            # but reported at most once an hour.
+            self.next_drift_log = now + DRIVER_RESET_INTERVAL_S
+            self.log.info(
+                f"CPU policy drifted (EPP {actual.epp}, boost "
+                f"{'on' if actual.boost else 'off'}, max "
+                f"{actual.max_freq_khz or 'uncapped'}); rewriting it."
+            )
+        for warning in self.hardware.apply_cpu(wanted):
+            self.log.warn(warning)
+        actual = self.hardware.read_cpu()
+        if actual is None or self._cpu_matches(actual, wanted):
+            return
+        if now < self.next_driver_reset:
+            return
+        self.next_driver_reset = now + DRIVER_RESET_INTERVAL_S
+        if not self.hardware.reset_cpufreq_driver():
+            self.log.warn(
+                "the CPU frequency driver ignores the requested policy and could not "
+                "be reset; a reboot clears it."
+            )
+            return
+        for warning in self.hardware.apply_cpu(wanted):
+            self.log.warn(warning)
+        actual = self.hardware.read_cpu()
+        if actual is not None and self._cpu_matches(actual, wanted):
+            self.log.info(
+                "CPU frequency driver was stuck; reset it and the policy holds."
+            )
+        else:
+            self.log.warn(
+                "the CPU frequency driver still ignores the requested policy after a "
+                "reset; a reboot clears it."
+            )
 
     def _write_current(
         self, profile: Profile, source: str, facts: Facts, vrmmax: int | None

@@ -391,7 +391,10 @@ class IdleSettings:
     soft_disable_boost: bool = False
     soft_max_freq_khz: int | None = None
     deep_epp: str = "power"
-    deep_disable_boost: bool = True
+    # The deep idle frequency cap (1.8 GHz) sits below the nominal clock, so
+    # boost cannot engage anyway; leaving the boost switch alone avoids
+    # toggling the most fragile amd-pstate knob several times an hour.
+    deep_disable_boost: bool = False
     deep_max_freq_khz: int | None = 1800000
     deep_apply_smu: bool = True
     deep_stapm_mw: int = 10000

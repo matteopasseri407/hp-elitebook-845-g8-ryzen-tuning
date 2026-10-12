@@ -24,6 +24,11 @@ elitebook-thermal-profile (1.0.0) unstable; urgency=medium
     10 crashes in 10 minutes.
   * GNOME indicator: declares GNOME Shell 51 and shows when the service is
     not running.
+  * The CPU policy is read back every 30 s and rewritten if it drifted; a
+    cpufreq driver stuck at the nominal clock is re-registered (at most
+    hourly). amd-pstate dynamic EPP is turned off where present.
+  * Deep idle no longer toggles boost: its 1.8 GHz cap already keeps boost
+    out.
 
  -- Matteo Passeri <matteopasseri407@users.noreply.github.com>  Mon, 12 Oct 2026 12:00:00 +0200
 

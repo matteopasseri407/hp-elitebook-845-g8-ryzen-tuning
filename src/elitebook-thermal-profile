@@ -552,6 +552,12 @@ class Daemon:
         # by a crash or by the old watcher would make the panel show one.
         state_files.clear_idle()
         self.engine = build_engine(self.log, idle, state_files.read_override())
+        hardware = self.engine.hardware
+        if isinstance(hardware, engine_mod.SysfsHardware):
+            if hardware.disable_dynamic_epp():
+                self.log.info(
+                    "Turned off amd-pstate dynamic EPP: this service sets EPP itself."
+                )
         self.games = engine_mod.GameDetector(
             enabled=truthy(os.environ.get("ELITEBOOK_STEAM_DETECTION", "1")),
             interval_ac=float(

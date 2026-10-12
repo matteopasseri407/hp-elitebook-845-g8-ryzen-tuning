@@ -32,6 +32,7 @@ class FakeHardware:
 
     def apply_cpu(self, cpu: profiles.CpuPolicy) -> list[str]:
         self.calls.append(("cpu", cpu))
+        self.actual = None  # a write replaces whatever changed behind our back
         return []
 
     def apply_smu(self, smu: profiles.SmuLimits) -> tuple[str, str | None]:
@@ -41,6 +42,31 @@ class FakeHardware:
     def apply_devices(self, runtime_pm: str, panel: int) -> tuple[str, list[str]]:
         self.calls.append(("devices", (runtime_pm, panel)))
         return str(panel), []
+
+    # Readback: by default the hardware holds what was last written.
+    actual: profiles.CpuPolicy | None = None
+    stuck_max: int | None = None
+    resets = 0
+
+    def read_cpu(self) -> profiles.CpuPolicy | None:
+        written = [arg for kind, arg in self.calls if kind == "cpu"]
+        if self.actual is not None:
+            return self.actual
+        if not written:
+            return None
+        last = written[-1]
+        assert isinstance(last, profiles.CpuPolicy)
+        if self.stuck_max is not None:
+            return profiles.CpuPolicy(last.epp, last.boost, self.stuck_max)
+        return last
+
+    def disable_dynamic_epp(self) -> bool:
+        return False
+
+    def reset_cpufreq_driver(self) -> bool:
+        self.resets += 1
+        self.stuck_max = None
+        return True
 
     def kinds(self) -> list[str]:
         kinds = [kind for kind, _ in self.calls]
@@ -463,3 +489,86 @@ def test_profile_without_vrm_limit_writes_the_stock_one_back(tmp_path: Path) -> 
     calls = (tmp_path / "calls").read_text(encoding="utf-8").splitlines()
     assert "--vrmmax-current=45000" in calls[0]
     assert "--vrmmax-current=90000" in calls[1]
+
+
+# --- readback ------------------------------------------------------------------
+
+
+def test_policy_changed_behind_our_back_is_rewritten(setup: Setup) -> None:
+    eng, hw, log, _ = setup
+    eng.step(facts(0))
+    hw.kinds()
+    hw.actual = profiles.CpuPolicy("performance", True, None)
+    eng.step(facts(engine_mod.DRIFT_CHECK_S))
+    assert hw.kinds() == ["cpu"]
+    assert any("drifted" in line for line in log.infos)
+
+
+def test_a_stuck_driver_is_reset_once_an_hour(setup: Setup) -> None:
+    eng, hw, log, _ = setup
+    eng.step(facts(0))
+    hw.stuck_max = 1901000
+    eng.step(facts(engine_mod.DRIFT_CHECK_S))
+    assert hw.resets == 1
+    assert any("reset it and the policy holds" in line for line in log.infos)
+    hw.stuck_max = 1901000
+    eng.step(facts(2 * engine_mod.DRIFT_CHECK_S))
+    assert hw.resets == 1
+    eng.step(facts(engine_mod.DRIVER_RESET_INTERVAL_S + engine_mod.DRIFT_CHECK_S))
+    assert hw.resets == 2
+
+
+def test_rounded_cap_is_not_drift(setup: Setup) -> None:
+    eng, hw, _, _ = setup
+    for second in range(31):
+        eng.step(facts(second, busy=1.0))
+    hw.kinds()
+    hw.stuck_max = 1901000  # amd-pstate rounding 1.8 GHz up a step
+    eng.step(facts(31 + engine_mod.DRIFT_CHECK_S, busy=1.0))
+    assert hw.kinds() == []
+    assert hw.resets == 0
+
+
+def test_sysfs_readback_and_driver_reset_stay_in_the_fixture(tmp_path: Path) -> None:
+    cpufreq = tmp_path / "cpu" / "cpufreq"
+    policy = cpufreq / "policy0"
+    policy.mkdir(parents=True)
+    (cpufreq / "boost").write_text("1\n", encoding="utf-8")
+    (policy / "energy_performance_preference").write_text("power\n", encoding="utf-8")
+    (policy / "scaling_max_freq").write_text("1901000\n", encoding="utf-8")
+    (policy / "cpuinfo_max_freq").write_text("4508086\n", encoding="utf-8")
+    hw = engine_mod.SysfsHardware(
+        cpufreq_dir=cpufreq,
+        pci_devices_dir=tmp_path,
+        drm_dir=tmp_path,
+        runtime_pm_defaults=tmp_path / "rpm",
+        lockdown_path=tmp_path / "lockdown",
+        ryzenadj=None,
+    )
+    assert hw.amd_pstate_status == tmp_path / "cpu" / "amd_pstate" / "status"
+    assert hw.read_cpu() == profiles.CpuPolicy("power", True, 1901000)
+    assert hw.reset_cpufreq_driver() is False
+    status = tmp_path / "cpu" / "amd_pstate" / "status"
+    status.parent.mkdir()
+    status.write_text("active\n", encoding="utf-8")
+    assert hw.reset_cpufreq_driver() is True
+
+
+def test_dynamic_epp_is_turned_off_inside_the_fixture(tmp_path: Path) -> None:
+    cpufreq = tmp_path / "cpu" / "cpufreq"
+    cpufreq.mkdir(parents=True)
+    knob = tmp_path / "cpu" / "amd_pstate" / "dynamic_epp"
+    hw = engine_mod.SysfsHardware(
+        cpufreq_dir=cpufreq,
+        pci_devices_dir=tmp_path,
+        drm_dir=tmp_path,
+        runtime_pm_defaults=tmp_path / "rpm",
+        lockdown_path=tmp_path / "lockdown",
+        ryzenadj=None,
+    )
+    assert hw.disable_dynamic_epp() is False
+    knob.parent.mkdir()
+    knob.write_text("enabled\n", encoding="utf-8")
+    assert hw.disable_dynamic_epp() is True
+    assert knob.read_text(encoding="utf-8").strip() == "disabled"
+    assert hw.disable_dynamic_epp() is False

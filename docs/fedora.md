@@ -121,7 +121,7 @@ cat /run/elitebook-thermal-profile/idle-watcher
 cat /run/elitebook-thermal-profile/guard
 ```
 
-The idle overlay is a staged step inside the service, not a profile replacement. Soft idle starts after a few quiet seconds with low-power EPP and no frequency cap. Deep idle starts only after longer quiet, then disables boost and uses a temporary low max frequency. Any real CPU load restores the profile in force: `ac`, `battery`, `gaming`, or the manual choice. The state file keeps the name `idle-watcher` from the earlier separate watcher, and the GNOME indicator reads it.
+The idle overlay is a staged step inside the service, not a profile replacement. Soft idle starts after a few quiet seconds with low-power EPP and no frequency cap. Deep idle starts only after longer quiet, then caps the frequency at 1.8 GHz (below the base clock, so boost cannot engage) and lowers the SMU limits. Any real CPU load restores the profile in force: `ac`, `battery`, `gaming`, or the manual choice. The state file keeps the name `idle-watcher` from the earlier separate watcher, and the GNOME indicator reads it.
 
 The GNOME indicator keeps the manual surface small on purpose: `Auto`, `Game`, and `Quiet`. Battery-specific profiles and the `performance` profile are still active underneath through automation or the CLI, but they are shown as current state instead of extra daily buttons.
 

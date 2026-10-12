@@ -82,6 +82,20 @@ Upstream reference: the RyzenAdj wiki Renoir tuning guide documents the STT
 overwrite of STAPM, and on Zen3 platforms vendors can additionally clamp PM
 table values while every write still reports success.
 
+## CPU Stuck At The Base Clock
+
+Every 30 seconds the service reads the CPU policy back (EPP, boost, maximum
+frequency) and rewrites it if something else changed it; the journal says
+"CPU policy drifted", at most once an hour. amd-pstate on kernel 7.0 has been
+seen holding the maximum frequency at the nominal clock (1.9 GHz on a 5850U)
+with boost on, accepting higher values but ignoring them. When a rewrite does
+not take, the service re-registers the driver (`passive`, then `active` in
+`/sys/devices/system/cpu/amd_pstate/status`), at most once an hour, and logs
+the result. A reboot clears it as well.
+
+Kernels that offer amd-pstate dynamic EPP (`amd_pstate/dynamic_epp`) have it
+turned off when the service starts, because the service sets EPP itself.
+
 ## The Service Stopped And Does Not Restart
 
 The service gives up instead of retrying forever when retrying cannot help:

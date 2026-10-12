@@ -248,7 +248,8 @@ def test_deep_idle_can_leave_smu_alone() -> None:
     idle = profiles.IdleSettings(deep_apply_smu=False)
     target = profiles.target_for(ac, profiles.IDLE_DEEP, idle)
     assert target.smu == profiles.target_for(ac, profiles.IDLE_NONE, idle).smu
-    assert target.cpu == profiles.CpuPolicy("power", False, 1800000)
+    # The 1.8 GHz cap already keeps boost out; the boost switch is left alone.
+    assert target.cpu == profiles.CpuPolicy("power", True, 1800000)
 
 
 def test_lower_cap() -> None:

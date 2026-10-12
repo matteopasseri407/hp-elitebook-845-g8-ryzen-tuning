@@ -94,22 +94,22 @@ Modulo helper stdlib-only condiviso. Legge sysfs, trova RyzenAdj, scrive policy 
 
 | Simbolo | Tipo | Linea | Firma |
 |---|---|---|---|
-| `read_trimmed` | function | L38 | `def read_trimmed(path: Path) -> str` |
-| `is_uint` | function | L47 | `def is_uint(value: str \| None) -> bool` |
-| `read_key_value_file` | function | L51 | `def read_key_value_file(path: Path) -> dict[str, str]` |
-| `on_ac_power` | function | L66 | `def on_ac_power(power_supply_dir: Path, *, default_when_unknown: bool = False) -> bool` |
-| `battery_device` | function | L91 | `def battery_device(power_supply_dir: Path) -> Path \| None` |
-| `battery_capacity` | function | L105 | `def battery_capacity(power_supply_dir: Path) -> int \| None` |
-| `cpu_temperature_c` | function | L141 | `def cpu_temperature_c(hwmon_dir: Path) -> int \| None` |
-| `find_ryzenadj` | function | L147 | `def find_ryzenadj(configured: str, search_paths: list[str]) -> str \| None` |
-| `kernel_lockdown_mode` | function | L171 | `def kernel_lockdown_mode(lockdown_path: Path) -> str` |
-| `acquire_dispatcher_lock` | function | L190 | `def acquire_dispatcher_lock(state_dir: Path, timeout_s: float) -> typing.TextIO` |
-| `sysfs_value_matches` | function | L208 | `def sysfs_value_matches(path: Path, desired: str) -> bool` |
-| `apply_cpu_policy` | function | L216 | `def apply_cpu_policy(cpufreq_dir: Path, epp: str, boost: str, max_freq: str, *, skip_unchanged: bool = False) -> list[str]` |
-| `apply_smu_limits` | function | L315 | `def apply_smu_limits(ryzenadj_bin: str, stapm_mw: str, fast_mw: str, slow_mw: str, apu_mw: str, tctl_c: str, vrmmax_ma: str \| None = None) -> bool` |
-| `apply_pci_runtime_pm` | function | L380 | `def apply_pci_runtime_pm(pci_devices_dir: Path, policy: str, defaults_file: Path) -> list[str]` |
-| `apply_panel_power_savings` | function | L436 | `def apply_panel_power_savings(drm_dir: Path, level: str) -> str` |
-| `write_atomic` | function | L460 | `def write_atomic(path: Path, content: str, mode: int = 0o644) -> None` |
+| `read_trimmed` | function | L37 | `def read_trimmed(path: Path) -> str` |
+| `is_uint` | function | L46 | `def is_uint(value: str \| None) -> bool` |
+| `read_key_value_file` | function | L50 | `def read_key_value_file(path: Path) -> dict[str, str]` |
+| `on_ac_power` | function | L65 | `def on_ac_power(power_supply_dir: Path, *, default_when_unknown: bool = False) -> bool` |
+| `battery_device` | function | L90 | `def battery_device(power_supply_dir: Path) -> Path \| None` |
+| `battery_capacity` | function | L104 | `def battery_capacity(power_supply_dir: Path) -> int \| None` |
+| `cpu_temperature_c` | function | L140 | `def cpu_temperature_c(hwmon_dir: Path) -> int \| None` |
+| `find_ryzenadj` | function | L146 | `def find_ryzenadj(configured: str, search_paths: list[str]) -> str \| None` |
+| `kernel_lockdown_mode` | function | L170 | `def kernel_lockdown_mode(lockdown_path: Path) -> str` |
+| `acquire_dispatcher_lock` | function | L189 | `def acquire_dispatcher_lock(state_dir: Path, timeout_s: float) -> typing.TextIO` |
+| `sysfs_value_matches` | function | L207 | `def sysfs_value_matches(path: Path, desired: str) -> bool` |
+| `apply_cpu_policy` | function | L215 | `def apply_cpu_policy(cpufreq_dir: Path, epp: str, boost: str, max_freq: str, *, skip_unchanged: bool = False) -> list[str]` |
+| `apply_smu_limits` | function | L314 | `def apply_smu_limits(ryzenadj_bin: str, stapm_mw: str, fast_mw: str, slow_mw: str, apu_mw: str, tctl_c: str, vrmmax_ma: str \| None = None) -> bool` |
+| `apply_pci_runtime_pm` | function | L379 | `def apply_pci_runtime_pm(pci_devices_dir: Path, policy: str, defaults_file: Path) -> list[str]` |
+| `apply_panel_power_savings` | function | L435 | `def apply_panel_power_savings(drm_dir: Path, level: str) -> str` |
+| `write_atomic` | function | L459 | `def write_atomic(path: Path, content: str, mode: int = 0o644) -> None` |
 
 ### [`src/elitebook_profiles.py`](src/elitebook_profiles.py)
 
@@ -118,22 +118,22 @@ Profili, override di `profiles.conf` e decisioni pure. Il modulo non tocca hardw
 | Simbolo | Tipo | Linea | Firma |
 |---|---|---|---|
 | `PROFILE_NAMES`, `SOURCE_*`, `IDLE_*` | constant | L22-L32 | nomi dei profili, sorgenti (`auto`, `manual`, `steam-game-watcher`) e stadi idle (`none`, `soft`, `deep`) |
-| `Profile` | dataclass | L51 | valori completi di un profilo: EPP, boost, frequenza massima, limiti SMU, `tctl_c`, `vrmmax_ma`, `runtime_pm`, `panel_power_savings`, `tuned_profile` |
-| `BUILTIN_PROFILES` | constant | L80 | valori di fabbrica dei sei profili |
-| `ProfileConfig` | class | L114 | `ProfileConfig.load(path) -> ProfileConfig`, `get(key)` |
-| `_Overrides` | class | L151 | applica le chiavi di `profiles.conf` a un profilo, con limiti e avvisi (interno) |
-| `resolve_profile` | function | L274 | `def resolve_profile(name: str, config: ProfileConfig, battery_saver_max_freq_khz: int = ...) -> tuple[Profile, list[str]]` |
-| `auto_profile` | function | L310 | `def auto_profile(on_ac: bool, battery_percent: int \| None, low_threshold: int) -> str` |
-| `choose_base` | function | L320 | `def choose_base(on_ac: bool, battery_percent: int \| None, low_threshold: int, manual: str \| None, game_running: bool) -> tuple[str, str]` |
-| `IdleSettings` | dataclass | L376 | soglie e valori degli stadi soft e deep. `IdleSettings.from_env(env=None)` legge le variabili `ELITEBOOK_*` |
-| `IdleDetector` | class | L451 | `__init__(settings)`, `reset()`, `update(busy_percent, load1, allowed) -> str` (stadio idle) |
-| `CpuPolicy` | dataclass | L497 | EPP, boost, frequenza massima |
-| `SmuLimits` | dataclass | L504 | limiti SMU e `tctl_c` |
-| `Target` | dataclass | L514 | valori target completi: `cpu`, `smu`, `runtime_pm`, `panel_power_savings`, `tuned_profile` |
-| `lower_cap` | function | L522 | `def lower_cap(a: int \| None, b: int \| None) -> int \| None` |
-| `target_for` | function | L531 | `def target_for(profile: Profile, idle_stage: str, idle: IdleSettings) -> Target` |
-| `cap_battery_current` | function | L571 | `def cap_battery_current(target: Target, cap_ma: int \| None) -> Target` |
-| `hardware_problem` | function | L593 | `def hardware_problem(vendor: str, product: str, cpu: str) -> str \| None` |
+| `Profile` | dataclass | L50 | valori completi di un profilo: EPP, boost, frequenza massima, limiti SMU, `tctl_c`, `vrmmax_ma`, `runtime_pm`, `panel_power_savings`, `tuned_profile` |
+| `BUILTIN_PROFILES` | constant | L79 | valori di fabbrica dei sei profili |
+| `ProfileConfig` | class | L113 | `ProfileConfig.load(path) -> ProfileConfig`, `get(key)` |
+| `_Overrides` | class | L150 | applica le chiavi di `profiles.conf` a un profilo, con limiti e avvisi (interno) |
+| `resolve_profile` | function | L273 | `def resolve_profile(name: str, config: ProfileConfig, battery_saver_max_freq_khz: int = ...) -> tuple[Profile, list[str]]` |
+| `auto_profile` | function | L309 | `def auto_profile(on_ac: bool, battery_percent: int \| None, low_threshold: int) -> str` |
+| `choose_base` | function | L319 | `def choose_base(on_ac: bool, battery_percent: int \| None, low_threshold: int, manual: str \| None, game_running: bool) -> tuple[str, str]` |
+| `IdleSettings` | dataclass | L375 | soglie e valori degli stadi soft e deep. `IdleSettings.from_env(env=None)` legge le variabili `ELITEBOOK_*` |
+| `IdleDetector` | class | L453 | `__init__(settings)`, `reset()`, `update(busy_percent, load1, allowed) -> str` (stadio idle) |
+| `CpuPolicy` | dataclass | L499 | EPP, boost, frequenza massima |
+| `SmuLimits` | dataclass | L506 | limiti SMU e `tctl_c` |
+| `Target` | dataclass | L516 | valori target completi: `cpu`, `smu`, `runtime_pm`, `panel_power_savings`, `tuned_profile` |
+| `lower_cap` | function | L524 | `def lower_cap(a: int \| None, b: int \| None) -> int \| None` |
+| `target_for` | function | L533 | `def target_for(profile: Profile, idle_stage: str, idle: IdleSettings) -> Target` |
+| `cap_battery_current` | function | L573 | `def cap_battery_current(target: Target, cap_ma: int \| None) -> Target` |
+| `hardware_problem` | function | L595 | `def hardware_problem(vendor: str, product: str, cpu: str) -> str \| None` |
 
 ### [`src/elitebook_engine.py`](src/elitebook_engine.py)
 
@@ -142,33 +142,36 @@ Motore di riconciliazione: l'unico codice che scrive le impostazioni di potenza.
 | Simbolo | Tipo | Linea | Firma |
 |---|---|---|---|
 | `REASSERT_INTERVAL_S`, `RESUME_FOLLOWUP_S`, `SMU_RETRY_S`, `THERMAL_WRITE_SAMPLES` | constant | L39-L42 | riscrittura oraria (3600 s), follow-up dopo la ripresa (10 s), ritento SMU (300 s), scrittura periodica del record (60 campioni) |
-| `now_iso` | function | L49 | `def now_iso() -> str` |
-| `Log` | class | L53 | `Log(prog)`, `info(message)`, `warn(message)` |
-| `Facts` | dataclass | L70 | snapshot dei fatti per tick: `now`, `on_ac`, `battery_percent`, `busy_percent`, `load1`, `game_running`, `temperature_c` |
-| `CpuSampler` | class | L80 | `busy_percent() -> float`, da `/proc/stat` |
-| `load1` | function | L105 | `def load1(loadavg: Path = Path("/proc/loadavg")) -> float` |
-| `steam_appid_from_environ` | function | L128 | `def steam_appid_from_environ(environ_path: Path) -> str \| None` |
-| `find_steam_game` | function | L165 | `def find_steam_game(...) -> tuple[dict[str, str] \| None, bool]` |
-| `GameDetector` | class | L199 | `poll(now, on_ac) -> dict[str, str] \| None`: scansione a intervalli (20 s con Steam aperto, 30 s su AC, 120 s a batteria) |
-| `Hardware` | Protocol | L241 | `apply_tuned`, `apply_cpu`, `apply_smu`, `apply_devices` |
-| `SysfsHardware` | dataclass | L277 | adapter reale verso sysfs, RyzenAdj, tuned e runtime PM |
-| `SysfsHardware.apply_tuned` | method | L242 | `def apply_tuned(self, tuned_profile: str) -> list[str]` |
-| `SysfsHardware.apply_cpu` | method | L244 | `def apply_cpu(self, cpu: CpuPolicy) -> list[str]` |
-| `SysfsHardware.apply_smu` | method | L246 | `def apply_smu(self, smu: SmuLimits) -> tuple[str, str \| None]` |
-| `SysfsHardware.apply_devices` | method | L248 | `def apply_devices(self, runtime_pm: str, panel: int) -> tuple[str, list[str]]` |
-| `StateFiles` | class | L381 | `write_current`, `write_idle`, `clear_idle`, `write_thermal`, `read_override`, `write_override` |
-| `ThermalTracker` | class | L431 | `reset(profile, profile_updated, target_c)`, `sample(temperature)`, `write()` |
-| `describe` | function | L500 | `def describe(profile: Profile) -> str` |
-| `Engine` | class | L511 | `Engine(hardware, files, log, config, idle, ...)` |
-| `Engine.set_config` | method | L549 | `def set_config(self, config: ProfileConfig) -> None` |
-| `Engine.set_manual` | method | L553 | `def set_manual(self, profile: str \| None) -> None` |
-| `Engine.request_reassert` | method | L557 | `def request_reassert(self, now: float, followup: bool = False) -> None` |
-| `Engine.step` | method | L572 | `def step(self, facts: Facts, sample_idle: bool = True) -> None` |
-| `Engine._reconcile` | method | L616 | confronta target e stato applicato, scrive solo le differenze |
-| `Engine._write_current` | method | L699 | scrive `current` |
-| `Engine._write_idle` | method | L729 | scrive o cancella `idle-watcher` |
-| `Engine.leave_idle` | method | L766 | `def leave_idle(self) -> None`: toglie l'overlay all'uscita del daemon, lascia il profilo base |
-| `env_int` | function | L780 | `def env_int(key: str, default: int, env: Mapping[str, str] \| None = None) -> int` |
+| `now_iso` | function | L52 | `def now_iso() -> str` |
+| `Log` | class | L56 | `Log(prog)`, `info(message)`, `warn(message)` |
+| `Facts` | dataclass | L73 | snapshot dei fatti per tick: `now`, `on_ac`, `battery_percent`, `busy_percent`, `load1`, `game_running`, `temperature_c` |
+| `CpuSampler` | class | L83 | `busy_percent() -> float`, da `/proc/stat` |
+| `load1` | function | L108 | `def load1(loadavg: Path = Path("/proc/loadavg")) -> float` |
+| `steam_appid_from_environ` | function | L131 | `def steam_appid_from_environ(environ_path: Path) -> str \| None` |
+| `find_steam_game` | function | L168 | `def find_steam_game(...) -> tuple[dict[str, str] \| None, bool]` |
+| `GameDetector` | class | L202 | `poll(now, on_ac) -> dict[str, str] \| None`: scansione a intervalli (20 s con Steam aperto, 30 s su AC, 120 s a batteria) |
+| `Hardware` | Protocol | L244 | `apply_tuned`, `apply_cpu`, `apply_smu`, `apply_devices`, `read_cpu`, `reset_cpufreq_driver` |
+| `SysfsHardware` | dataclass | L284 | adapter reale verso sysfs, RyzenAdj, tuned e runtime PM |
+| `SysfsHardware.read_cpu` | method | L309 | `def read_cpu(self) -> CpuPolicy \| None` |
+| `SysfsHardware.disable_dynamic_epp` | method | L330 | `def disable_dynamic_epp(self) -> bool` |
+| `SysfsHardware.reset_cpufreq_driver` | method | L350 | `def reset_cpufreq_driver(self) -> bool` |
+| `SysfsHardware.apply_tuned` | method | L375 | `def apply_tuned(self, tuned_profile: str) -> list[str]` |
+| `SysfsHardware.apply_cpu` | method | L399 | `def apply_cpu(self, cpu: CpuPolicy) -> list[str]` |
+| `SysfsHardware.apply_smu` | method | L408 | `def apply_smu(self, smu: SmuLimits) -> tuple[str, str \| None]` |
+| `SysfsHardware.apply_devices` | method | L445 | `def apply_devices(self, runtime_pm: str, panel: int) -> tuple[str, list[str]]` |
+| `StateFiles` | class | L461 | `write_current`, `write_idle`, `clear_idle`, `write_thermal`, `read_override`, `write_override` |
+| `ThermalTracker` | class | L511 | `reset(profile, profile_updated, target_c)`, `sample(temperature)`, `write()` |
+| `describe` | function | L580 | `def describe(profile: Profile) -> str` |
+| `Engine` | class | L591 | `Engine(hardware, files, log, config, idle, ...)` |
+| `Engine.set_config` | method | L632 | `def set_config(self, config: ProfileConfig) -> None` |
+| `Engine.set_manual` | method | L636 | `def set_manual(self, profile: str \| None) -> None` |
+| `Engine.request_reassert` | method | L640 | `def request_reassert(self, now: float, followup: bool = False) -> None` |
+| `Engine.step` | method | L655 | `def step(self, facts: Facts, sample_idle: bool = True) -> None` |
+| `Engine._reconcile` | method | L699 | confronta target e stato applicato, scrive solo le differenze |
+| `Engine._write_current` | method | L841 | scrive `current` |
+| `Engine._write_idle` | method | L871 | scrive o cancella `idle-watcher` |
+| `Engine.leave_idle` | method | L908 | `def leave_idle(self) -> None`: toglie l'overlay all'uscita del daemon, lascia il profilo base |
+| `env_int` | function | L922 | `def env_int(key: str, default: int, env: Mapping[str, str] \| None = None) -> int` |
 
 ### [`src/elitebook-thermal-profile`](src/elitebook-thermal-profile)
 
@@ -197,19 +200,19 @@ Daemon e CLI in un solo file. `daemon` è il servizio systemd e l'unico processo
 | `peer_uid` | function | L471 | `def peer_uid(conn: socket.socket) -> int` (chi chiama la socket deve essere root) |
 | `sd_notify` | function | L478 | `def sd_notify(message: str) -> None` |
 | `Daemon` | class | L541 | processo del servizio: tick, socket di controllo, watchdog |
-| `Daemon.__init__` | method | L494 | controlla l'hardware, carica la configurazione e i valori di idle, apre la socket |
-| `Daemon._listen` | method | L585 | `def _listen(self) -> socket.socket` |
-| `Daemon.facts` | method | L616 | `def facts(self) -> engine_mod.Facts` |
-| `Daemon.check_resume` | method | L639 | `def check_resume(self) -> None`: rileva la sospensione confrontando CLOCK_BOOTTIME e CLOCK_MONOTONIC |
-| `Daemon.check_config` | method | L651 | `def check_config(self, now: float) -> None`: rilegge `profiles.conf` quando cambia |
-| `Daemon.refresh` | method | L661 | `def refresh(self) -> None`: riconcilia subito, riusando l'ultimo campione CPU |
-| `Daemon.handle` | method | L682 | `def handle(self, request: dict[str, typing.Any]) -> dict[str, typing.Any]`: `auto`, `set`, `reassert` |
-| `Daemon.serve_one` | method | L716 | `def serve_one(self) -> None`: una richiesta sulla socket, solo da root |
-| `Daemon.stop` | method | L753 | `def stop(self, *_: object) -> None` |
-| `Daemon.run` | method | L756 | `def run(self) -> int`: il ciclo principale del servizio |
-| `apply_once` | function | L795 | `def apply_once(profile: str \| None) -> int`: un passaggio senza daemon, rifiuta se il daemon è attivo |
-| `reexec_via_sudo` | function | L826 | `def reexec_via_sudo(argv: list[str]) -> typing.NoReturn` |
-| `main` | function | L843 | `def main(argv: list[str]) -> int` |
+| `Daemon.__init__` | method | L542 | controlla l'hardware, carica la configurazione e i valori di idle, apre la socket |
+| `Daemon._listen` | method | L591 | `def _listen(self) -> socket.socket` |
+| `Daemon.facts` | method | L622 | `def facts(self) -> engine_mod.Facts` |
+| `Daemon.check_resume` | method | L645 | `def check_resume(self) -> None`: rileva la sospensione confrontando CLOCK_BOOTTIME e CLOCK_MONOTONIC |
+| `Daemon.check_config` | method | L657 | `def check_config(self, now: float) -> None`: rilegge `profiles.conf` quando cambia |
+| `Daemon.refresh` | method | L667 | `def refresh(self) -> None`: riconcilia subito, riusando l'ultimo campione CPU |
+| `Daemon.handle` | method | L688 | `def handle(self, request: dict[str, typing.Any]) -> dict[str, typing.Any]`: `auto`, `set`, `reassert` |
+| `Daemon.serve_one` | method | L722 | `def serve_one(self) -> None`: una richiesta sulla socket, solo da root |
+| `Daemon.stop` | method | L759 | `def stop(self, *_: object) -> None` |
+| `Daemon.run` | method | L762 | `def run(self) -> int`: il ciclo principale del servizio |
+| `apply_once` | function | L801 | `def apply_once(profile: str \| None) -> int`: un passaggio senza daemon, rifiuta se il daemon è attivo |
+| `reexec_via_sudo` | function | L832 | `def reexec_via_sudo(argv: list[str]) -> typing.NoReturn` |
+| `main` | function | L849 | `def main(argv: list[str]) -> int` |
 
 ### [`src/elitebook-power-guard`](src/elitebook-power-guard)
 

@@ -186,6 +186,9 @@ fi
 - On battery, hold every profile to the battery VRM current limit
 - Stop retrying on configuration errors and after 10 crashes in 10 minutes
 - GNOME indicator: support GNOME Shell 51, show when the service is stopped
+- Read the CPU policy back every 30 s, repair drift, reset a stuck cpufreq
+  driver at most hourly; turn off amd-pstate dynamic EPP where present
+- Deep idle no longer toggles boost
 
 * Wed Oct 07 2026 Matteo Passeri <matteopasseri407@users.noreply.github.com> - 0.9.0-1
 - Protect against battery brownouts and transient voltage droops under heavy
