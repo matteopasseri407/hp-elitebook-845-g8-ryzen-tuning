@@ -207,6 +207,15 @@ class DaemonTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, msg=proc.stderr)
         self.assertEqual(len(self._ryzenadj_writes()), 2)
 
+    def test_liveness_probes_leave_no_warnings(self) -> None:
+        self._wait_for(lambda: (self.state / "current").exists(), "first apply")
+        for _ in range(3):
+            proc = self._cli("apply-once", "cool")
+            self.assertIn("service is running", proc.stderr)
+        self._stop_daemon()
+        output = self.daemon.stdout.read() if self.daemon.stdout else ""
+        self.assertNotIn("warning", output)
+
     def test_config_edit_is_picked_up_without_a_command(self) -> None:
         self._wait_for(lambda: (self.state / "current").exists(), "first apply")
         (self.root / "profiles.conf").write_text("AC_SLOW_MW=12000\n")

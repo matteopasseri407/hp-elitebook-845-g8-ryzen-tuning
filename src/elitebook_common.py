@@ -337,10 +337,13 @@ def apply_smu_limits(
             cmd,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
+            timeout=20,
             check=False,
         )
         return result.returncode == 0
-    except OSError:
+    except (OSError, subprocess.SubprocessError):
+        # A hung RyzenAdj must not hang its caller: the daemon would stop
+        # answering and the systemd watchdog would kill it.
         return False
 
 
@@ -418,10 +421,15 @@ def apply_pci_runtime_pm(
             continue
         recorded.setdefault(device.name, current or "on")
     if recorded:
-        write_atomic(
-            defaults_file,
-            "".join(f"{name}={value}\n" for name, value in sorted(recorded.items())),
-        )
+        try:
+            write_atomic(
+                defaults_file,
+                "".join(
+                    f"{name}={value}\n" for name, value in sorted(recorded.items())
+                ),
+            )
+        except OSError:
+            failures.append(f"failed to record runtime PM defaults in {defaults_file}")
     return failures
 
 

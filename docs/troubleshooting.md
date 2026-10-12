@@ -82,6 +82,22 @@ Upstream reference: the RyzenAdj wiki Renoir tuning guide documents the STT
 overwrite of STAPM, and on Zen3 platforms vendors can additionally clamp PM
 table values while every write still reports success.
 
+## The Service Stopped And Does Not Restart
+
+The service gives up instead of retrying forever when retrying cannot help:
+
+- exit status 78: unsupported hardware, a `RYZENADJ` path that is not
+  executable, or a second daemon started while one is already running. The
+  journal says which. Fix the cause, then
+  `sudo systemctl restart elitebook-thermal-profile.service`.
+- more than 10 crashes in 10 minutes: systemd stops restarting it so a
+  crashing daemon does not drain the battery. The power guard timer starts it
+  again within six hours. Run `journalctl -u elitebook-thermal-profile -b` and
+  report the traceback.
+
+While it is stopped, the last applied limits stay in force (the SMU keeps
+them), and the GNOME indicator shows "Control: service not running".
+
 ## Unsupported Hardware
 
 The default guard only allows the tested HP EliteBook 845 G8 with Ryzen 7 PRO 5850U.

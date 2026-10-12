@@ -148,6 +148,50 @@ def test_threshold_crossing_switches_and_drops_a_manual_choice(setup: Setup) -> 
     assert any("low battery guard" in line for line in log.infos)
 
 
+def test_any_profile_on_battery_keeps_the_battery_current_limit(setup: Setup) -> None:
+    eng, hw, log, state = setup
+    eng.set_manual("gaming")
+    eng.step(facts(0, on_ac=True))
+    smu = [arg for kind, arg in hw.calls if kind == "smu"][-1]
+    assert smu.vrmmax_ma is None
+    assert state_of(state)["vrmmax_ma"] == "stock"
+    hw.kinds()
+    eng.step(facts(1, on_ac=False))
+    smu = [arg for kind, arg in hw.calls if kind == "smu"][-1]
+    assert smu.vrmmax_ma == 45000
+    assert smu.fast_mw == 30000
+    assert state_of(state)["vrmmax_ma"] == "45000"
+    assert any("held at 45 A" in line for line in log.infos)
+    hw.kinds()
+    eng.set_manual("cool")
+    eng.step(facts(2, on_ac=False))
+    smu = [arg for kind, arg in hw.calls if kind == "smu"][-1]
+    assert smu.vrmmax_ma == 40000
+
+
+def test_battery_saver_holds_until_the_battery_climbs_back(setup: Setup) -> None:
+    eng, _, _, state = setup
+    eng.step(facts(0, battery=20))
+    assert state_of(state)["profile"] == "battery-saver"
+    eng.step(facts(1, battery=21))
+    eng.step(facts(2, battery=22))
+    assert state_of(state)["profile"] == "battery-saver"
+    eng.step(facts(3, battery=23))
+    assert state_of(state)["profile"] == "battery"
+    eng.step(facts(4, battery=21))
+    assert state_of(state)["profile"] == "battery"
+
+
+def test_base_change_during_an_overlay_rewrites_the_overlay_file(setup: Setup) -> None:
+    eng, _, _, state = setup
+    for second in range(31):
+        eng.step(facts(second, busy=1.0))
+    assert state_of(state, "idle-watcher")["base_profile"] == "battery"
+    eng.step(facts(31, on_ac=True, busy=1.0))
+    assert state_of(state, "idle-watcher")["base_profile"] == "ac"
+    assert state_of(state, "idle-watcher")["stage"] == "deep"
+
+
 def test_idle_overlay_writes_only_cpu_then_smu_and_leaves_current_alone(
     setup: Setup,
 ) -> None:

@@ -17,6 +17,10 @@ const PROFILE_SCRIPT =
 const STATE_DIR = '/run/elitebook-thermal-profile';
 const STATE_FILE = '/run/elitebook-thermal-profile/current';
 const IDLE_STATE_FILE = '/run/elitebook-thermal-profile/idle-watcher';
+// The daemon creates its control socket when it starts and removes it when it
+// stops, so the socket's presence says whether anything is following the
+// power source right now.
+const CONTROL_SOCKET = '/run/elitebook-thermal-profile/control';
 
 const PROFILES = {
     ac: {
@@ -118,7 +122,8 @@ class ThermalIndicator extends PanelMenu.Button {
             monitor.set_rate_limit(200);
             monitor.connect('changed', (_monitor, file) => {
                 const path = file?.get_path?.();
-                if (path === STATE_FILE || path === IDLE_STATE_FILE)
+                if (path === STATE_FILE || path === IDLE_STATE_FILE ||
+                    path === CONTROL_SOCKET)
                     this._scheduleRefresh();
             });
             this._monitors.push(monitor);
@@ -266,7 +271,10 @@ class ThermalIndicator extends PanelMenu.Button {
         }
 
         const data = PROFILES[profile];
-        this._modeItem.label.text = `Control: ${this._sourceLabel(source)}`;
+        const running = GLib.file_test(CONTROL_SOCKET, GLib.FileTest.EXISTS);
+        this._modeItem.label.text = running
+            ? `Control: ${this._sourceLabel(source)}`
+            : 'Control: service not running';
         this._baseItem.label.text = `Current: ${data.label} - ${data.detail}`;
         this._idleItem.label.text = `Idle: ${this._idleLabel(idleState)}`;
         this.accessible_name = `EliteBook power: ${data.label}, idle ${this._idleLabel(idleState)}`;

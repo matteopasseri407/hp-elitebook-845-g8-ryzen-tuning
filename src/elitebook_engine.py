@@ -39,6 +39,10 @@ from elitebook_profiles import CpuPolicy, Profile, ProfileConfig, SmuLimits, Tar
 REASSERT_INTERVAL_S = 3600.0
 RESUME_FOLLOWUP_S = 10.0
 SMU_RETRY_S = 300.0
+# Percentage points the battery must climb back above the low battery
+# threshold before battery-saver lets go: estimated capacity jitters by a
+# point under changing load, and each flip would switch profiles.
+LOW_BATTERY_HYSTERESIS = 2
 THERMAL_WRITE_SAMPLES = 60
 
 
@@ -537,6 +541,8 @@ class Engine:
         self.next_smu_retry: float | None = None
         self.last_facts: Facts | None = None
         self._resolved: dict[str, Profile] = {}
+        self._saver_latched = False
+        self._written_vrmmax: int | None | str = "unset"
 
     # Inputs that do not arrive with every tick.
 
@@ -571,13 +577,17 @@ class Engine:
         the machine towards deep idle faster.
         """
         self.last_facts = facts
+        threshold = self.low_battery_threshold
+        if self._saver_latched and threshold > 0:
+            threshold += LOW_BATTERY_HYSTERESIS
         name, source = profiles.choose_base(
             facts.on_ac,
             facts.battery_percent,
-            self.low_battery_threshold,
+            threshold,
             self.manual,
             facts.game_running,
         )
+        self._saver_latched = source == profiles.SOURCE_AUTO and name == "battery-saver"
         if (
             source == profiles.SOURCE_AUTO
             and name == "battery-saver"
@@ -596,6 +606,10 @@ class Engine:
                 self.idle.reset()
             stage = self.idle.stage
         target = profiles.target_for(profile, stage, self.idle.settings)
+        if not facts.on_ac:
+            target = profiles.cap_battery_current(
+                target, self._resolve("battery").vrmmax_ma
+            )
         self._reconcile(facts, profile, source, stage, target)
         self.thermal.sample(facts.temperature_c)
 
@@ -659,24 +673,36 @@ class Engine:
         if base_changed:
             self.base = (profile, source)
             self.log.info(describe(profile))
+        vrmmax = target.smu.vrmmax_ma
+        if vrmmax != profile.vrmmax_ma and vrmmax != self._written_vrmmax:
+            self.log.info(
+                f"On battery: VRM peak current held at {(vrmmax or 0) // 1000} A "
+                f"for the '{profile.name}' profile."
+            )
         if (
             base_changed
             or self.smu_status != smu_before
             or self.panel_state != panel_before
+            or vrmmax != self._written_vrmmax
         ):
-            updated = self._write_current(profile, source, facts)
+            self._written_vrmmax = vrmmax
+            updated = self._write_current(profile, source, facts, vrmmax)
             if base_changed:
                 self.thermal.reset(profile.name, updated, profile.tctl_c)
 
-        if stage != self.stage:
+        # The overlay file names its base profile, so a base change while an
+        # overlay is active rewrites it too.
+        if stage != self.stage or (base_changed and stage != profiles.IDLE_NONE):
             self._write_idle(stage, profile, source, facts, target)
             self.stage = stage
 
-    def _write_current(self, profile: Profile, source: str, facts: Facts) -> str:
+    def _write_current(
+        self, profile: Profile, source: str, facts: Facts, vrmmax: int | None
+    ) -> str:
         updated = now_iso()
         battery = "unknown" if facts.battery_percent is None else facts.battery_percent
         max_freq = "uncapped" if profile.max_freq_khz is None else profile.max_freq_khz
-        vrm = "stock" if profile.vrmmax_ma is None else profile.vrmmax_ma
+        vrm = "stock" if vrmmax is None else vrmmax
         self.files.write_current(
             [
                 f"profile={profile.name}",

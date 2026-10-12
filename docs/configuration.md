@@ -52,6 +52,14 @@ value, so an empty file behaves exactly like no file.
   measured in [measurements.md](measurements.md). Changing it does nothing here.
 - **`TCTL_C`** is the temperature the firmware aims at.
 - **`EPP`** is the hint passed to the CPU scaling driver.
+- **`VRMMAX_MA`** is the VRM peak current limit (EDC), in mA. It caps the
+  current spike of an all-core burst, such as a local LLM starting a long
+  prompt, which on battery can brown the pack out and switch the laptop off.
+  `battery` uses 45000 and `battery-saver` 30000. On battery the
+  `BATTERY_VRMMAX_MA` value also holds every other profile, including a
+  manual choice and a Steam game, so picking `gaming` on battery cannot lift
+  it. Profiles without a value use the firmware's own limit, recorded when the
+  service first starts after boot.
 - **`RUNTIME_PM`** decides whether idle PCI devices may power down on their
   own. `auto` (the default on `battery` and `battery-saver`) lets them; on this
   machine that means the two AMD USB controllers, which wake again on their own

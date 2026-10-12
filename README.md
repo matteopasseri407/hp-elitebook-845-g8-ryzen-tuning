@@ -40,7 +40,7 @@ Rembrandt models (6000-series) and unlisted hardware require `ELITEBOOK_THERMAL_
 
 Custom limits can be set in `/etc/elitebook-thermal-profile/profiles.conf` without touching code. The service picks up edits within about five seconds.
 
-One service, `elitebook-thermal-profile.service`, chooses the profile and is the only thing that writes power settings. A battery at or below 20% forces `battery-saver`, even over a manual choice. Otherwise a manual choice wins, then a running Steam game (`gaming`), then the `ac` or `battery` profile. Periods of idle add a lighter overlay on top, which this table does not show.
+One service, `elitebook-thermal-profile.service`, chooses the profile and is the only thing that writes power settings. A battery at or below 20% forces `battery-saver`, even over a manual choice. Otherwise a manual choice wins, then a running Steam game (`gaming`), then the `ac` or `battery` profile. Periods of idle add a lighter overlay on top, which this table does not show. On battery the VRM peak current limit (45 A by default) holds whatever profile runs, a manual or game profile included, because an all-core burst on battery can otherwise switch the laptop off.
 
 ---
 

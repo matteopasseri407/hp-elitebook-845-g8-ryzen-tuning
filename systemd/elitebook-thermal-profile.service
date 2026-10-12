@@ -4,6 +4,10 @@ Documentation=https://github.com/matteopasseri407/hp-elitebook-845-g8-ryzen-tuni
 # On Fedora the daemon also selects tuned profiles.
 After=tuned.service
 Wants=tuned.service
+# A daemon that keeps crashing should stop retrying instead of spending
+# battery on restarts; the power guard timer starts it again later.
+StartLimitIntervalSec=600
+StartLimitBurst=10
 
 [Service]
 # The daemon is the only writer of power settings: it follows the power
@@ -15,6 +19,8 @@ NotifyAccess=main
 ExecStart=/usr/local/sbin/elitebook-thermal-profile daemon
 Restart=on-failure
 RestartSec=5s
+# Exit 78 (EX_CONFIG): unsupported hardware or a bad RYZENADJ path.
+RestartPreventExitStatus=78
 WatchdogSec=30s
 Environment=ELITEBOOK_LOW_BATTERY_THRESHOLD=20
 Environment=ELITEBOOK_IDLE_SAMPLE_INTERVAL=1

@@ -1,5 +1,5 @@
 Name:           elitebook-thermal-profile
-Version:        0.10.0
+Version:        1.0.0
 Release:        1%{?dist}
 Summary:        Thermal and power profiles for HP AMD Cezanne laptops
 
@@ -174,12 +174,18 @@ fi
 %{_datadir}/gnome-shell/extensions/%{extension_uuid}/
 
 %changelog
-* Mon Oct 12 2026 Matteo Passeri <matteopasseri407@users.noreply.github.com> - 0.10.0-1
+* Mon Oct 12 2026 Matteo Passeri <matteopasseri407@users.noreply.github.com> - 1.0.0-1
 - Replace the dispatcher, udev rule, sleep hook, idle watcher and Steam
   watcher with one daemon that is the only writer of power settings
 - Stop reapplying the profile on every battery level update
 - Add RUNTIME_PM and PANEL_POWER_SAVINGS profile keys
 - New commands: reassert, daemon, apply-once
+- Reread AC and battery on kernel power events instead of every second
+- Restore the firmware VRM limit on profiles without one
+- Hold battery-saver until the battery climbs 2 points above the threshold
+- On battery, hold every profile to the battery VRM current limit
+- Stop retrying on configuration errors and after 10 crashes in 10 minutes
+- GNOME indicator: support GNOME Shell 51, show when the service is stopped
 
 * Wed Oct 07 2026 Matteo Passeri <matteopasseri407@users.noreply.github.com> - 0.9.0-1
 - Protect against battery brownouts and transient voltage droops under heavy

@@ -568,6 +568,25 @@ def target_for(profile: Profile, idle_stage: str, idle: IdleSettings) -> Target:
     )
 
 
+def cap_battery_current(target: Target, cap_ma: int | None) -> Target:
+    """Hold any profile to the battery's VRM peak current limit.
+
+    The battery pack browns out on the current spike of an all-core AVX2
+    burst (a local LLM starting a long prompt) when the VRM limit is the
+    firmware's stock value. The battery profiles carry a lower limit, but a
+    manual choice or a Steam game can put an AC profile in force on battery,
+    so the limit is applied to whatever profile runs there.
+    """
+    if cap_ma is None:
+        return target
+    current = target.smu.vrmmax_ma
+    if current is not None and current <= cap_ma:
+        return target
+    return dataclasses.replace(
+        target, smu=dataclasses.replace(target.smu, vrmmax_ma=cap_ma)
+    )
+
+
 # --- supported hardware ----------------------------------------------------
 
 

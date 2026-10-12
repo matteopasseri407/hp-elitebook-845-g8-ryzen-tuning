@@ -267,3 +267,16 @@ def test_hardware_problem() -> None:
         profiles.hardware_problem("HP", "HP EliteBook 845 G9", "AMD Ryzen 7 PRO 6850U")
         or ""
     )
+
+
+def test_cap_battery_current() -> None:
+    idle = profiles.IdleSettings()
+    gaming = profiles.target_for(
+        profiles.BUILTIN_PROFILES["gaming"], profiles.IDLE_NONE, idle
+    )
+    assert profiles.cap_battery_current(gaming, 45000).smu.vrmmax_ma == 45000
+    assert profiles.cap_battery_current(gaming, None) == gaming
+    saver = profiles.target_for(
+        profiles.BUILTIN_PROFILES["battery-saver"], profiles.IDLE_NONE, idle
+    )
+    assert profiles.cap_battery_current(saver, 45000).smu.vrmmax_ma == 30000
