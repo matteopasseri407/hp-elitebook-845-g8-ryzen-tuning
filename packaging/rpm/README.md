@@ -22,7 +22,7 @@ boost, and CPU frequency when RyzenAdj is unavailable or blocked by lockdown.
 
 ## Package Layout
 
-- Install commands under `/usr/bin/`
+- Install commands under `/usr/bin/` and their Python modules under `/usr/lib/elitebook-thermal-profile/`
 - Install systemd units under `%{_unitdir}`; the main unit is one daemon that
   handles AC/battery, idle, Steam and resume, so no udev rule or sleep hook is
   shipped

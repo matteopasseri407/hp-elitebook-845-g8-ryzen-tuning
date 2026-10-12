@@ -68,11 +68,11 @@ python3 -m py_compile \
 install -Dm0755 src/elitebook-thermal-profile \
   %{buildroot}%{_bindir}/elitebook-thermal-profile
 install -Dm0644 src/elitebook_common.py \
-  %{buildroot}%{_bindir}/elitebook_common.py
+  %{buildroot}%{_prefix}/lib/elitebook-thermal-profile/elitebook_common.py
 install -Dm0644 src/elitebook_profiles.py \
-  %{buildroot}%{_bindir}/elitebook_profiles.py
+  %{buildroot}%{_prefix}/lib/elitebook-thermal-profile/elitebook_profiles.py
 install -Dm0644 src/elitebook_engine.py \
-  %{buildroot}%{_bindir}/elitebook_engine.py
+  %{buildroot}%{_prefix}/lib/elitebook-thermal-profile/elitebook_engine.py
 install -Dm0755 src/elitebook-power-guard \
   %{buildroot}%{_bindir}/elitebook-power-guard
 install -Dm0755 src/elitebook-hibernate-preflight \
@@ -159,9 +159,10 @@ fi
 %dir %{_sysconfdir}/%{name}
 %config(noreplace) %{_sysconfdir}/%{name}/profiles.conf
 %{_bindir}/elitebook-thermal-profile
-%{_bindir}/elitebook_common.py
-%{_bindir}/elitebook_profiles.py
-%{_bindir}/elitebook_engine.py
+%dir %{_prefix}/lib/elitebook-thermal-profile
+%{_prefix}/lib/elitebook-thermal-profile/elitebook_common.py
+%{_prefix}/lib/elitebook-thermal-profile/elitebook_profiles.py
+%{_prefix}/lib/elitebook-thermal-profile/elitebook_engine.py
 %{_bindir}/elitebook-power-guard
 %{_bindir}/elitebook-hibernate-preflight
 %{_unitdir}/elitebook-thermal-profile.service

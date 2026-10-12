@@ -12,6 +12,7 @@ PKG = debian/elitebook-thermal-profile
 GNOME_PKG = debian/gnome-shell-extension-elitebook-thermal-profile
 
 BINDIR = /usr/bin
+LIBDIR = /usr/lib/elitebook-thermal-profile
 UNITDIR = /usr/lib/systemd/system
 EXTDIR = /usr/share/gnome-shell/extensions
 
@@ -33,9 +34,9 @@ override_dh_auto_install:
 	# The hibernate preflight is intentionally absent: it inspects Fedora-style
 	# boot entries with grubby and checks an SELinux label.
 	install -D -m 0755 src/elitebook-thermal-profile $(PKG)$(BINDIR)/elitebook-thermal-profile
-	install -D -m 0644 src/elitebook_common.py $(PKG)$(BINDIR)/elitebook_common.py
-	install -D -m 0644 src/elitebook_profiles.py $(PKG)$(BINDIR)/elitebook_profiles.py
-	install -D -m 0644 src/elitebook_engine.py $(PKG)$(BINDIR)/elitebook_engine.py
+	install -D -m 0644 src/elitebook_common.py $(PKG)$(LIBDIR)/elitebook_common.py
+	install -D -m 0644 src/elitebook_profiles.py $(PKG)$(LIBDIR)/elitebook_profiles.py
+	install -D -m 0644 src/elitebook_engine.py $(PKG)$(LIBDIR)/elitebook_engine.py
 	install -D -m 0755 src/elitebook-power-guard $(PKG)$(BINDIR)/elitebook-power-guard
 
 	install -D -m 0644 systemd/elitebook-thermal-profile.service $(PKG)$(UNITDIR)/elitebook-thermal-profile.service
@@ -57,14 +58,6 @@ override_dh_auto_install:
 		$(PKG)$(BINDIR)/elitebook-power-guard
 	sed -i -e 's#/usr/local/sbin/elitebook-thermal-profile#$(BINDIR)/elitebook-thermal-profile#g' \
 		$(GNOME_PKG)$(EXTDIR)/$(EXTENSION_UUID)/extension.js
-
-# dh_fixperms makes everything under /usr/bin executable; the modules are
-# only imported by the CLI and the guard.
-override_dh_fixperms:
-	dh_fixperms
-	chmod 0644 $(PKG)$(BINDIR)/elitebook_common.py \
-		$(PKG)$(BINDIR)/elitebook_profiles.py \
-		$(PKG)$(BINDIR)/elitebook_engine.py
 
 # Units ship disabled and stopped. Tuning hardware is an explicit decision the
 # user makes after checking the supported hardware table, never a side effect

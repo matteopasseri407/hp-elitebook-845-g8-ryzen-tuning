@@ -72,8 +72,10 @@ jobs:
           echo "--- files landed in distribution paths ---"
           test -x /usr/bin/elitebook-thermal-profile
           test -x /usr/bin/elitebook-power-guard
-          test -f /usr/bin/elitebook_profiles.py
-          test -f /usr/bin/elitebook_engine.py
+          test -f /usr/lib/elitebook-thermal-profile/elitebook_common.py
+          test -f /usr/lib/elitebook-thermal-profile/elitebook_profiles.py
+          test -f /usr/lib/elitebook-thermal-profile/elitebook_engine.py
+          test ! -e /usr/bin/elitebook_common.py
           test -f /usr/lib/systemd/system/elitebook-thermal-profile.service
           test -f /usr/lib/systemd/system/elitebook-power-guard.timer
 
