@@ -51,6 +51,16 @@ PROFILE_CONF = Path(
     )
 )
 HWMON_DIR = Path(os.environ.get("ELITEBOOK_HWMON_DIR", "/sys/class/hwmon"))
+PCI_DEVICES_DIR = Path(
+    os.environ.get("ELITEBOOK_PCI_DEVICES_DIR", "/sys/bus/pci/devices")
+)
+DRM_DIR = Path(os.environ.get("ELITEBOOK_DRM_DIR", "/sys/class/drm"))
+RUNTIME_PM_DEFAULTS_FILE = STATE_DIR / "runtime-pm-defaults"
+# A system-auto run that would reapply the profile already in force is skipped
+# (battery capacity updates fire udev events every minute or so), unless the
+# last apply is older than this: a periodic reassert in case firmware dropped
+# the SMU limits without telling anyone.
+REAPPLY_MAX_AGE_S = 3600
 
 PROG = "elitebook-thermal-profile"
 
@@ -138,6 +148,19 @@ BUILTIN_PROFILES = {
     "cool": ("power", 16000, 22000, 12000, 12000, 85, "on", None, "balanced", "40000"),
 }
 
+# (runtime_pm, panel_power_savings) per profile. runtime_pm "auto" lets idle
+# PCI devices (USB controllers, mostly) power down; "default" restores what
+# the kernel chose at boot. panel_power_savings is the amdgpu ABM level 0-4:
+# it dims the backlight and compensates contrast, so colors shift slightly.
+DEVICE_POLICIES = {
+    "ac": ("default", "0"),
+    "performance": ("default", "0"),
+    "battery": ("auto", "1"),
+    "battery-saver": ("auto", "3"),
+    "gaming": ("default", "0"),
+    "cool": ("default", "0"),
+}
+
 SUDO_PRESERVE_ENV = (
     "RYZENADJ",
     "ELITEBOOK_PROFILE_SOURCE",
@@ -153,6 +176,9 @@ SUDO_PRESERVE_ENV = (
     "ELITEBOOK_RYZENADJ_SEARCH_PATHS",
     "ELITEBOOK_PROFILE_CONF",
     "ELITEBOOK_HWMON_DIR",
+    "ELITEBOOK_PCI_DEVICES_DIR",
+    "ELITEBOOK_DRM_DIR",
+    "ELITEBOOK_FORCE_REAPPLY",
 )
 
 DETECTED_PRODUCT = ""
@@ -197,6 +223,7 @@ Environment:
   RYZENADJ=/path/to/ryzenadj
   ELITEBOOK_PROFILE_SOURCE=manual|auto|system-auto|steam-game-watcher
   ELITEBOOK_THERMAL_FORCE=1   skip the supported-hardware guard
+  ELITEBOOK_FORCE_REAPPLY=1   reapply even if system auto finds nothing changed
   ELITEBOOK_LOW_BATTERY_THRESHOLD=20
   ELITEBOOK_BATTERY_SAVER_MAX_FREQ_KHZ=1800000""",
         file=sys.stderr,
@@ -364,6 +391,22 @@ def print_status() -> None:
     if temp:
         print(f"CPU temp:     {temp} C")
 
+    runtime_pm = current_value("runtime_pm")
+    panel = current_value("panel_power_savings")
+    if runtime_pm or panel:
+        devices_text = (
+            "idle devices power down"
+            if runtime_pm == "auto"
+            else "kernel defaults"
+            if runtime_pm == "default"
+            else "unknown"
+        )
+        if common.is_uint(panel):
+            panel_text = "off" if panel == "0" else f"level {panel}"
+        else:
+            panel_text = panel or "unknown"
+        print(f"Devices:      {devices_text}, panel power saving {panel_text}")
+
     print_thermal_record()
 
     print(f"Updated:      {updated or 'unknown'}")
@@ -408,6 +451,8 @@ def print_status_json() -> None:
             "apu": state.get("apu_mw", "unknown") or "unknown",
         },
         "tctl_c": state.get("tctl_c", "unknown") or "unknown",
+        "runtime_pm": state.get("runtime_pm", "unknown") or "unknown",
+        "panel_power_savings": state.get("panel_power_savings", "unknown") or "unknown",
         "battery_percent": battery_raw,
         "on_ac_power": on_ac_power(),
         "cpu_temp_c": temperature,
@@ -587,6 +632,43 @@ def override_max_freq(key: str, current: str) -> str:
     return value
 
 
+def override_runtime_pm(key: str, current: str) -> str:
+    value, lineno = profile_conf_value(key)
+    if value is None:
+        return current
+    lower = value.lower()
+    if lower in ("auto", "default"):
+        return lower
+    warn(
+        f"{PROFILE_CONF} line {lineno}: {key}='{value}' is not a valid runtime PM "
+        f"setting (expected auto/default); keeping {current}"
+    )
+    return current
+
+
+def unchanged_since_last_apply(profile: str, now: datetime) -> bool:
+    """True when system auto would only repeat the apply already in force."""
+    state = read_key_value_file(STATE_FILE)
+    if state.get("profile") != profile or state.get("source") != "system-auto":
+        return False
+    if state.get("smu") != "ok":
+        return False
+    try:
+        updated = datetime.fromisoformat(state.get("updated", ""))
+    except ValueError:
+        return False
+    age = (now - updated).total_seconds()
+    if age < 0 or age > REAPPLY_MAX_AGE_S:
+        return False
+    try:
+        conf_mtime = PROFILE_CONF.stat().st_mtime
+    except OSError:
+        conf_mtime = None
+    if conf_mtime is not None and conf_mtime >= updated.timestamp():
+        return False
+    return True
+
+
 def acquire_dispatcher_lock() -> typing.TextIO:
     try:
         return common.acquire_dispatcher_lock(STATE_DIR, 10)
@@ -639,6 +721,8 @@ def write_state(
     boost: str,
     max_freq: str,
     vrmmax: str = "stock",
+    runtime_pm: str = "unknown",
+    panel_power_savings: str = "unknown",
 ) -> None:
     battery_raw = common.battery_capacity(POWER_SUPPLY_DIR)
     battery_percent = str(battery_raw) if battery_raw is not None else "unknown"
@@ -659,6 +743,8 @@ def write_state(
         f"boost={boost}\n"
         f"max_freq={max_freq}\n"
         f"vrmmax_ma={vrmmax}\n"
+        f"runtime_pm={runtime_pm}\n"
+        f"panel_power_savings={panel_power_savings}\n"
         f"battery_percent={battery_percent}\n"
         f"low_battery_threshold_percent={threshold}\n"
         f"updated={updated}\n"
@@ -757,6 +843,17 @@ def main(argv: list[str]) -> int:
 
         profile = auto_profile if requested == "auto" else requested
 
+        if (
+            requested == "auto"
+            and profile_source == "system-auto"
+            and not truthy(os.environ.get("ELITEBOOK_FORCE_REAPPLY", ""))
+            and unchanged_since_last_apply(profile, datetime.now().astimezone())
+        ):
+            print(
+                f"EliteBook thermal profile '{profile}' already in force; nothing to do."
+            )
+            return 0
+
         builtin = BUILTIN_PROFILES.get(profile)
         if builtin is None:
             usage()
@@ -804,6 +901,9 @@ def main(argv: list[str]) -> int:
         boost = override_boost(f"{prefix}_BOOST", boost)
         max_freq = override_max_freq(f"{prefix}_MAX_FREQ_KHZ", max_freq)
         vrmmax = override_uint(f"{prefix}_VRMMAX_MA", 15000, 120000, vrmmax)
+        runtime_pm, panel_level = DEVICE_POLICIES.get(profile, ("default", "0"))
+        runtime_pm = override_runtime_pm(f"{prefix}_RUNTIME_PM", runtime_pm)
+        panel_level = override_uint(f"{prefix}_PANEL_POWER_SAVINGS", 0, 4, panel_level)
 
         apply_tuned_profile(tuned_profile)
         for failure in common.apply_cpu_policy(
@@ -839,6 +939,18 @@ def main(argv: list[str]) -> int:
                 "Install ryzenadj for the SMU power limits, or set RYZENADJ=/path/to/ryzenadj."
             )
 
+        for failure in common.apply_pci_runtime_pm(
+            PCI_DEVICES_DIR, runtime_pm, RUNTIME_PM_DEFAULTS_FILE
+        ):
+            warn(failure)
+        panel_status = common.apply_panel_power_savings(DRM_DIR, panel_level)
+        if panel_status == "failed":
+            warn(
+                f"the panel refused power saving level {panel_level} "
+                "(is amdgpu.abmlevel set on the kernel command line?)"
+            )
+        panel_state = panel_level if panel_status == "ok" else panel_status
+
         write_state(
             profile,
             profile_source,
@@ -852,6 +964,8 @@ def main(argv: list[str]) -> int:
             boost,
             max_freq,
             vrmmax,
+            runtime_pm,
+            panel_state,
         )
 
         vrm_summary = f", VRM {int(vrmmax) // 1000}A" if common.is_uint(vrmmax) else ""

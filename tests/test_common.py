@@ -125,3 +125,76 @@ def test_apply_smu_limits_forwards_vrmmax(tmp_path: Path) -> None:
     )
     args = args_file.read_text(encoding="utf-8")
     assert "--vrmmax-current=45000" in args
+
+
+def make_pci(root: Path) -> Path:
+    pci = root / "pci"
+    drivers = root / "drivers"
+    for name, driver, cls, control in (
+        ("0000:04:00.3", "xhci_hcd", "0x0c0330", "on"),
+        ("0000:04:00.6", "snd_hda_intel", "0x040300", "auto"),
+        ("0000:04:00.0", "amdgpu", "0x030000", "on"),
+        ("0000:00:14.3", None, "0x060100", "on"),
+    ):
+        device = pci / name
+        (device / "power").mkdir(parents=True)
+        (device / "power" / "control").write_text(control + "\n", encoding="utf-8")
+        (device / "class").write_text(cls + "\n", encoding="utf-8")
+        if driver:
+            (drivers / driver).mkdir(parents=True, exist_ok=True)
+            (device / "driver").symlink_to(drivers / driver)
+    return pci
+
+
+def control(pci: Path, name: str) -> str:
+    return (pci / name / "power" / "control").read_text(encoding="utf-8").strip()
+
+
+def test_runtime_pm_auto_skips_display_and_driverless(tmp_path: Path) -> None:
+    pci = make_pci(tmp_path)
+    defaults = tmp_path / "state" / "runtime-pm-defaults"
+
+    failures = common.apply_pci_runtime_pm(pci, "auto", defaults)
+
+    assert failures == []
+    assert control(pci, "0000:04:00.3") == "auto"
+    assert control(pci, "0000:04:00.0") == "on"
+    assert control(pci, "0000:00:14.3") == "on"
+    assert common.read_key_value_file(defaults) == {"0000:04:00.3": "on"}
+
+
+def test_runtime_pm_default_restores_only_what_it_changed(tmp_path: Path) -> None:
+    pci = make_pci(tmp_path)
+    defaults = tmp_path / "state" / "runtime-pm-defaults"
+    common.apply_pci_runtime_pm(pci, "auto", defaults)
+    # A second auto pass must not record its own "auto" as the default.
+    common.apply_pci_runtime_pm(pci, "auto", defaults)
+
+    failures = common.apply_pci_runtime_pm(pci, "default", defaults)
+
+    assert failures == []
+    assert control(pci, "0000:04:00.3") == "on"
+    assert control(pci, "0000:04:00.6") == "auto"
+    assert not defaults.exists()
+
+
+def test_runtime_pm_default_without_record_is_a_no_op(tmp_path: Path) -> None:
+    pci = make_pci(tmp_path)
+
+    failures = common.apply_pci_runtime_pm(
+        pci, "default", tmp_path / "state" / "runtime-pm-defaults"
+    )
+
+    assert failures == []
+    assert control(pci, "0000:04:00.3") == "on"
+
+
+def test_panel_power_savings(tmp_path: Path) -> None:
+    drm = tmp_path / "drm"
+    assert common.apply_panel_power_savings(drm, "1") == "unsupported"
+
+    knob = drm / "card1-eDP-1" / "amdgpu" / "panel_power_savings"
+    knob.parent.mkdir(parents=True)
+    knob.write_text("0\n", encoding="utf-8")
+    assert common.apply_panel_power_savings(drm, "3") == "ok"
+    assert knob.read_text(encoding="utf-8").strip() == "3"

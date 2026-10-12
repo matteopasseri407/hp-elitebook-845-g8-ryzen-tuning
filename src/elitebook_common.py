@@ -334,6 +334,111 @@ def apply_smu_limits(
         return False
 
 
+# Display drivers keep their own runtime PM policy: forcing it from here can
+# blank or stall the panel, so they are never touched.
+_RUNTIME_PM_DRIVER_DENYLIST = ("amdgpu", "radeon", "nouveau", "nvidia")
+
+
+def _runtime_pm_candidates(pci_devices_dir: Path) -> list[Path]:
+    """PCI devices with a bound driver whose runtime PM we may change."""
+    try:
+        devices = sorted(pci_devices_dir.glob("*"))
+    except OSError:
+        return []
+    candidates: list[Path] = []
+    for device in devices:
+        try:
+            driver_link = device / "driver"
+            if not driver_link.exists():
+                continue
+            driver = os.path.basename(os.readlink(driver_link))
+        except OSError:
+            continue
+        if driver in _RUNTIME_PM_DRIVER_DENYLIST:
+            continue
+        if read_trimmed(device / "class").startswith("0x03"):
+            continue
+        if not (device / "power" / "control").exists():
+            continue
+        candidates.append(device)
+    return candidates
+
+
+def apply_pci_runtime_pm(
+    pci_devices_dir: Path, policy: str, defaults_file: Path
+) -> list[str]:
+    """Let idle PCI devices runtime-suspend, or put back the boot defaults.
+
+    ``auto`` switches every eligible device to ``auto`` and records the value
+    it replaced in ``defaults_file``; ``default`` writes the recorded values
+    back and forgets them. The record lives under /run, so a reboot starts
+    again from the kernel's own defaults. Devices whose driver has no runtime
+    PM callbacks simply stay active, so the switch is harmless for them.
+    Returns one message per write that did not take effect.
+    """
+    failures: list[str] = []
+    recorded = read_key_value_file(defaults_file)
+
+    if policy == "default":
+        for name, value in recorded.items():
+            control = pci_devices_dir / name / "power" / "control"
+            if sysfs_value_matches(control, value):
+                continue
+            try:
+                control.write_text(value + "\n", encoding="utf-8")
+            except OSError:
+                failures.append(f"failed to restore runtime PM {value} for {name}")
+        try:
+            defaults_file.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            failures.append(f"failed to remove {defaults_file}")
+        return failures
+
+    for device in _runtime_pm_candidates(pci_devices_dir):
+        control = device / "power" / "control"
+        current = read_trimmed(control)
+        if current == "auto":
+            continue
+        try:
+            control.write_text("auto\n", encoding="utf-8")
+        except OSError:
+            failures.append(f"failed to enable runtime PM for {device.name}")
+            continue
+        recorded.setdefault(device.name, current or "on")
+    if recorded:
+        write_atomic(
+            defaults_file,
+            "".join(f"{name}={value}\n" for name, value in sorted(recorded.items())),
+        )
+    return failures
+
+
+def apply_panel_power_savings(drm_dir: Path, level: str) -> str:
+    """Set the amdgpu panel power savings (ABM) level on internal panels.
+
+    Returns ``ok``, ``unsupported`` when no internal panel exposes the knob
+    (older kernels, non-AMD graphics), or ``failed`` when a write was refused,
+    for example because amdgpu.abmlevel is pinned on the kernel command line.
+    """
+    try:
+        knobs = sorted(drm_dir.glob("card*-eDP-*/amdgpu/panel_power_savings"))
+    except OSError:
+        knobs = []
+    if not knobs:
+        return "unsupported"
+    status = "ok"
+    for knob in knobs:
+        if sysfs_value_matches(knob, level):
+            continue
+        try:
+            knob.write_text(level + "\n", encoding="utf-8")
+        except OSError:
+            status = "failed"
+    return status
+
+
 def write_atomic(path: Path, content: str, mode: int = 0o644) -> None:
     """Write text to a file atomically via a temporary file in the same directory."""
     path.parent.mkdir(mode=0o755, parents=True, exist_ok=True)

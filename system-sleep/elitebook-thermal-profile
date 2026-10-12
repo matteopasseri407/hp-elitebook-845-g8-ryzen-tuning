@@ -23,6 +23,9 @@ def main(argv: list[str]) -> int:
 
     env = dict(os.environ)
     env["ELITEBOOK_PROFILE_SOURCE"] = "system-auto"
+    # Firmware may reset the SMU limits across sleep, so never let the
+    # dispatcher's "nothing changed" shortcut skip the post-resume apply.
+    env["ELITEBOOK_FORCE_REAPPLY"] = "1"
     try:
         subprocess.run(
             [DISPATCHER, "auto"],

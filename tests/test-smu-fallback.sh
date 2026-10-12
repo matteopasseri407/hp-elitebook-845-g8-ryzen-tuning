@@ -71,6 +71,8 @@ run_dispatcher() {
   env_args=(
     "ELITEBOOK_THERMAL_STATE_DIR=$root/state"
     "ELITEBOOK_CPUFREQ_DIR=$root/cpufreq"
+    "ELITEBOOK_PCI_DEVICES_DIR=$root/pci"
+    "ELITEBOOK_DRM_DIR=$root/drm"
     "ELITEBOOK_DMI_ID_DIR=$root/dmi"
     "ELITEBOOK_CPUINFO_PATH=$root/cpuinfo"
     "ELITEBOOK_POWER_SUPPLY_DIR=$root/power-supply"

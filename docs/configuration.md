@@ -33,6 +33,7 @@ Keys are `<PROFILE>_<VALUE>`:
 | power | `STAPM_MW`, `FAST_MW`, `SLOW_MW`, `APU_MW` — milliwatts, 4000-45000 |
 | thermal | `TCTL_C` — degrees Celsius, 60-100 |
 | policy | `EPP` — `performance`, `balance_performance`, `balance_power`, `power` |
+| devices | `RUNTIME_PM` — `auto`, `default`; `PANEL_POWER_SAVINGS` — 0-4 |
 
 Only write down what you want to change. Anything absent keeps its built-in
 value, so an empty file behaves exactly like no file.
@@ -51,6 +52,14 @@ value, so an empty file behaves exactly like no file.
   measured in [measurements.md](measurements.md). Changing it does nothing here.
 - **`TCTL_C`** is the temperature the firmware aims at.
 - **`EPP`** is the hint passed to the CPU scaling driver.
+- **`RUNTIME_PM`** decides whether idle PCI devices may power down on their
+  own. `auto` (the default on `battery` and `battery-saver`) lets them; on this
+  machine that means the two AMD USB controllers, which wake again on their own
+  when a device needs them. `default` puts back what the kernel chose at boot.
+  Display drivers and devices without a driver are never touched.
+- **`PANEL_POWER_SAVINGS`** is the amdgpu panel power saving level, 0 (off) to
+  4: it lowers the backlight and boosts contrast to compensate, so colors shift
+  slightly. Defaults: 1 on `battery`, 3 on `battery-saver`, 0 everywhere else.
 
 ## Bad values are refused, not applied
 
@@ -131,7 +140,10 @@ measures and reports; the decision stays yours.
 
 The record lives at `/run/elitebook-thermal-profile/thermal` and resets every
 time a profile is applied, so a peak from this morning is never blamed on the
-profile you are running now. It requires the idle watcher: installing with
+profile you are running now. The battery reports its charge level every minute
+or so; those reports only reapply the profile when it actually has to change
+(for example when the charge drops to the `battery-saver` threshold), with a
+full reassert at most once an hour, so on battery the record keeps building. It requires the idle watcher: installing with
 `--without-idle-watcher` leaves `status` showing only the current temperature.
 
 Thresholds, if the defaults do not suit your machine:
@@ -150,6 +162,7 @@ the unit or the session rather than to a profile:
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `ELITEBOOK_LOW_BATTERY_THRESHOLD` | `20` | Battery percentage that triggers `battery-saver` |
+| `ELITEBOOK_FORCE_REAPPLY` | unset | Make a system-auto run reapply even when the profile in force has not changed |
 | `ELITEBOOK_BATTERY_SAVER_MAX_FREQ_KHZ` | `1800000` | Frequency cap used by `battery-saver` |
 | `RYZENADJ` | autodetected | Explicit path to the RyzenAdj binary |
 
