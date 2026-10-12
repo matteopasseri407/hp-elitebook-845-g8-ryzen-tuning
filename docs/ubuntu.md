@@ -20,9 +20,9 @@ with the output of `sudo elitebook-power-guard check`.
 | RyzenAdj | COPR package or source build | source build (`--build-ryzenadj`) |
 | Hibernate preflight | supported (opt-in) | not supported |
 
-The dispatcher hands a `balanced` or `powersave` profile to `tuned` when tuned
+The daemon hands a `balanced` or `powersave` profile to `tuned` when tuned
 is present. Ubuntu and Debian ship `power-profiles-daemon` instead, and there
-is no `tuned-ppd`. On those systems the dispatcher drives EPP, boost, CPU
+is no `tuned-ppd`. On those systems the daemon drives EPP, boost, CPU
 maximum frequency, and the SMU limits directly, which is the same control path
 Fedora uses for everything except the tuned handoff.
 
@@ -54,10 +54,10 @@ You have three options.
 boot, then Security, then Secure Boot, and disable it. Everything then works
 exactly as it does on Fedora. This is what the development machine runs.
 
-**2. Leave Secure Boot on and accept the degraded mode.** The dispatcher
+**2. Leave Secure Boot on and accept the degraded mode.** The daemon
 applies the CPU-level part of every profile — EPP, boost, and the frequency
-cap — writes `smu=blocked` in its state file, and exits successfully. Profile
-switching, the idle overlay, the low-battery guard, and the Steam watcher all
+cap — writes `smu=blocked` in its state file, and keeps running. Profile
+switching, the idle overlay, the low-battery guard, and Steam detection all
 keep working.
 
 Be realistic about how much that leaves. The everyday profiles (`ac`,
@@ -110,8 +110,6 @@ machine is on the supported hardware list:
 
 ```bash
 sudo systemctl enable --now elitebook-thermal-profile.service
-sudo systemctl enable --now elitebook-idle-watcher.service
-sudo systemctl enable --now elitebook-steam-game-watcher.service
 sudo systemctl enable --now elitebook-power-guard.timer
 sudo systemctl start elitebook-power-guard.service
 ```
@@ -163,11 +161,11 @@ To see what the installer detected before running it, without root:
 ## GNOME power modes go away
 
 The update guard masks `power-profiles-daemon.service` so it cannot fight the
-dispatcher over EPP policy. GNOME's Balanced / Power Saver / Performance
+daemon over EPP policy. GNOME's Balanced / Power Saver / Performance
 selector is a front end for that daemon, so once this project is installed the
 selector stops working. This is intentional and identical to the Fedora
-behavior: profile switching moves to `elitebook-thermal-profile`, the udev
-automation, and the optional panel indicator.
+behavior: profile switching moves to `elitebook-thermal-profile`, the service's
+own power-source tracking, and the optional panel indicator.
 
 Uninstalling restores `power-profiles-daemon` and re-enables it.
 
@@ -207,18 +205,21 @@ install, the source tree when developing or when no `.deb` matches your system.
 
 ## Steam detection with the Snap package
 
-The Steam watcher finds games by locating the `steam` and `steamwebhelper`
+The daemon's Steam detection finds games by locating the `steam` and `steamwebhelper`
 processes and walking down to their children. This is verified against a
 system Steam package. Ubuntu also ships Steam as a Snap, where the processes
 start under `snap-confine` and the tree has an extra level; that has not been
 tested.
 
-If it does not work there, the failure is harmless: the watcher simply never
+If it does not work there, the failure is harmless: the service simply never
 switches to the `gaming` profile, and everything else keeps working. Check with:
 
 ```bash
-cat /run/elitebook-thermal-profile/steam-game-watcher
+grep source= /run/elitebook-thermal-profile/current
+journalctl -u elitebook-thermal-profile.service -n 50
 ```
+
+`source=steam-game-watcher` in the state file means a game was detected.
 
 ## Not available here
 
@@ -250,8 +251,9 @@ If you installed from source:
 sudo ./scripts/install.sh --uninstall
 ```
 
-That removes the units, binaries, udev rule, sleep hook, and
-`/etc/elitebook-thermal-profile/backend.conf`, unmasks
+That removes the service and guard units, the binaries, the
+`/etc/elitebook-thermal-profile/backend.conf` file, and any udev rule or sleep
+hook left behind by older versions. It unmasks
 `power-profiles-daemon.service`, and enables it again so the system returns to
 stock Ubuntu power management. To keep a RyzenAdj binary built by
 `--build-ryzenadj`, add `--keep-ryzenadj`.

@@ -14,8 +14,8 @@ BACKEND_CONF="$BACKEND_CONF_DIR/backend.conf"
 MODE=install
 WITH_GNOME_EXTENSION=0
 REMOVE_GNOME_EXTENSION=0
-ENABLE_STEAM_WATCHER=1
-ENABLE_IDLE_WATCHER=1
+ENABLE_STEAM_DETECTION=1
+ENABLE_IDLE_OVERLAY=1
 ENABLE_POWER_GUARD=1
 ENABLE_HIBERNATE_PREFLIGHT=0
 FORCE_HARDWARE=0
@@ -53,8 +53,8 @@ Options:
   --with-gnome-extension       Install the GNOME Shell panel indicator
   --with-hibernate-preflight   Install the btrfs swapfile hibernate preflight
                                and its systemd-hibernate drop-ins
-  --without-steam-watcher      Do not install or enable the Steam game watcher
-  --without-idle-watcher       Do not install or enable the idle overlay watcher
+  --without-steam-watcher      Disable Steam game detection in the daemon
+  --without-idle-watcher       Disable the idle overlay in the daemon
   --without-power-guard        Do not install the update guard timer
   --build-ryzenadj             Build RyzenAdj ${RYZENADJ_VERSION} from a pinned,
                                SHA256-verified upstream source tarball if missing
@@ -68,16 +68,18 @@ Options:
   -h, --help                   Show this help
 
 Installs:
-  /usr/local/sbin/elitebook-thermal-profile
+  /usr/local/sbin/elitebook-thermal-profile (single daemon and CLI)
+  /usr/local/sbin/elitebook_common.py, elitebook_profiles.py, elitebook_engine.py
   /etc/systemd/system/elitebook-thermal-profile.service
-  /etc/udev/rules.d/90-elitebook-thermal-profile.rules
-  /etc/systemd/system-sleep/elitebook-thermal-profile
   low-battery battery-saver automation at 20%
-  low-power idle overlay watcher
+  idle overlay, unless --without-idle-watcher
+  Steam game detection, unless --without-steam-watcher
   update guard timer that remasks conflicting GNOME power backends
 
-By default it also installs and enables the idle overlay watcher, Steam game watcher,
-and update guard timer.
+The daemon handles AC/battery, idle, Steam and resume. The --without-* flags
+write /etc/systemd/system/elitebook-thermal-profile.service.d/10-installer.conf
+so the daemon starts with the matching switch off. Installing without them
+removes that drop-in. By default the update guard timer is also enabled.
 EOF
 }
 
@@ -224,11 +226,11 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     --without-steam-watcher)
-      ENABLE_STEAM_WATCHER=0
+      ENABLE_STEAM_DETECTION=0
       shift
       ;;
     --without-idle-watcher)
-      ENABLE_IDLE_WATCHER=0
+      ENABLE_IDLE_OVERLAY=0
       shift
       ;;
     --without-power-guard)
@@ -507,12 +509,58 @@ check_hardware() {
   fi
 }
 
+# Removes what earlier releases installed: the separate idle and Steam watcher
+# programs and units, the udev rule and the system sleep hook. The single
+# daemon replaces all of them. Runs on every install and on uninstall.
+# /run/elitebook-thermal-profile/idle-watcher is not listed: the daemon writes
+# its overlay state to that name now.
+remove_legacy_components() {
+  systemctl disable --now elitebook-idle-watcher.service elitebook-steam-game-watcher.service >/dev/null 2>&1 || true
+  rm -f /etc/systemd/system/elitebook-idle-watcher.service
+  rm -f /etc/systemd/system/elitebook-steam-game-watcher.service
+  rm -f /usr/local/sbin/elitebook-idle-watcher
+  rm -f /usr/local/sbin/elitebook-steam-game-watcher
+  rm -f /etc/udev/rules.d/90-elitebook-thermal-profile.rules
+  udevadm control --reload-rules >/dev/null 2>&1 || true
+  rm -f /etc/systemd/system-sleep/elitebook-thermal-profile
+  rm -f /run/elitebook-thermal-profile/steam-game-watcher
+}
+
+# The daemon reads two optional switches from its environment. The --without-*
+# flags are kept in a drop-in so that every later restart applies them too.
+install_daemon_dropin() {
+  local dropin_dir="/etc/systemd/system/elitebook-thermal-profile.service.d"
+  local dropin="$dropin_dir/10-installer.conf"
+
+  if [[ "$ENABLE_IDLE_OVERLAY" -eq 1 && "$ENABLE_STEAM_DETECTION" -eq 1 ]]; then
+    rm -f "$dropin"
+    rmdir "$dropin_dir" >/dev/null 2>&1 || true
+    return
+  fi
+
+  install -d -m 0755 "$dropin_dir"
+  {
+    printf '# Written by %s from the --without-* flags.\n' "$SELF"
+    printf '[Service]\n'
+    if [[ "$ENABLE_IDLE_OVERLAY" -eq 0 ]]; then
+      printf 'Environment=ELITEBOOK_IDLE_OVERLAY=0\n'
+    fi
+    if [[ "$ENABLE_STEAM_DETECTION" -eq 0 ]]; then
+      printf 'Environment=ELITEBOOK_STEAM_DETECTION=0\n'
+    fi
+  } >"$dropin"
+  chmod 0644 "$dropin"
+}
+
 install_profile_files() {
+  remove_legacy_components
+
   install -D -m 0755 "$REPO_DIR/src/elitebook-thermal-profile" /usr/local/sbin/elitebook-thermal-profile
   install -D -m 0644 "$REPO_DIR/src/elitebook_common.py" /usr/local/sbin/elitebook_common.py
+  install -D -m 0644 "$REPO_DIR/src/elitebook_profiles.py" /usr/local/sbin/elitebook_profiles.py
+  install -D -m 0644 "$REPO_DIR/src/elitebook_engine.py" /usr/local/sbin/elitebook_engine.py
   install -D -m 0644 "$REPO_DIR/systemd/elitebook-thermal-profile.service" /etc/systemd/system/elitebook-thermal-profile.service
-  install -D -m 0644 "$REPO_DIR/udev/90-elitebook-thermal-profile.rules" /etc/udev/rules.d/90-elitebook-thermal-profile.rules
-  install -D -m 0755 "$REPO_DIR/system-sleep/elitebook-thermal-profile" /etc/systemd/system-sleep/elitebook-thermal-profile
+  install_daemon_dropin
 
   # Never overwrite profile overrides the user has already edited.
   if [[ ! -f "$BACKEND_CONF_DIR/profiles.conf" ]]; then
@@ -531,25 +579,6 @@ install_profile_files() {
     rm -f /usr/local/sbin/elitebook-power-guard
     rm -f /run/elitebook-thermal-profile/guard
     rm -f /run/elitebook-thermal-profile/fallback
-  fi
-
-  if [[ "$ENABLE_IDLE_WATCHER" -eq 1 ]]; then
-    install -D -m 0755 "$REPO_DIR/src/elitebook-idle-watcher" /usr/local/sbin/elitebook-idle-watcher
-    install -D -m 0644 "$REPO_DIR/systemd/elitebook-idle-watcher.service" /etc/systemd/system/elitebook-idle-watcher.service
-  else
-    systemctl disable --now elitebook-idle-watcher.service >/dev/null 2>&1 || true
-    rm -f /etc/systemd/system/elitebook-idle-watcher.service
-    rm -f /usr/local/sbin/elitebook-idle-watcher
-    rm -f /run/elitebook-thermal-profile/idle-watcher
-  fi
-
-  if [[ "$ENABLE_STEAM_WATCHER" -eq 1 ]]; then
-    install -D -m 0755 "$REPO_DIR/src/elitebook-steam-game-watcher" /usr/local/sbin/elitebook-steam-game-watcher
-    install -D -m 0644 "$REPO_DIR/systemd/elitebook-steam-game-watcher.service" /etc/systemd/system/elitebook-steam-game-watcher.service
-  else
-    systemctl disable --now elitebook-steam-game-watcher.service >/dev/null 2>&1 || true
-    rm -f /etc/systemd/system/elitebook-steam-game-watcher.service
-    rm -f /usr/local/sbin/elitebook-steam-game-watcher
   fi
 
   if [[ "$ENABLE_HIBERNATE_PREFLIGHT" -eq 1 ]]; then
@@ -629,19 +658,8 @@ install_gnome_extension() {
 
 enable_services() {
   systemctl daemon-reload
-  udevadm control --reload-rules
   systemctl enable elitebook-thermal-profile.service
   systemctl restart elitebook-thermal-profile.service
-
-  if [[ "$ENABLE_IDLE_WATCHER" -eq 1 ]]; then
-    systemctl enable elitebook-idle-watcher.service
-    systemctl restart elitebook-idle-watcher.service
-  fi
-
-  if [[ "$ENABLE_STEAM_WATCHER" -eq 1 ]]; then
-    systemctl enable elitebook-steam-game-watcher.service
-    systemctl restart elitebook-steam-game-watcher.service
-  fi
 
   if [[ "$ENABLE_POWER_GUARD" -eq 1 ]]; then
     systemctl enable --now elitebook-power-guard.timer
@@ -668,8 +686,8 @@ print_install_summary() {
     echo "On Wayland, log out and back in after changing the extension UUID."
   fi
 
-  [[ "$ENABLE_STEAM_WATCHER" -eq 1 ]] || echo "Steam game watcher skipped."
-  [[ "$ENABLE_IDLE_WATCHER" -eq 1 ]] || echo "Idle overlay watcher skipped."
+  [[ "$ENABLE_STEAM_DETECTION" -eq 1 ]] || echo "Steam game detection disabled in the daemon (ELITEBOOK_STEAM_DETECTION=0)."
+  [[ "$ENABLE_IDLE_OVERLAY" -eq 1 ]] || echo "Idle overlay disabled in the daemon (ELITEBOOK_IDLE_OVERLAY=0)."
   [[ "$ENABLE_POWER_GUARD" -eq 1 ]] || echo "Update guard timer skipped."
 
   if [[ "$ENABLE_HIBERNATE_PREFLIGHT" -eq 1 ]]; then
@@ -749,31 +767,27 @@ restore_power_backend() {
 }
 
 uninstall_profiles() {
-  systemctl disable --now elitebook-steam-game-watcher.service >/dev/null 2>&1 || true
-  systemctl disable --now elitebook-idle-watcher.service >/dev/null 2>&1 || true
+  remove_legacy_components
   systemctl disable --now elitebook-thermal-profile.service >/dev/null 2>&1 || true
   systemctl disable --now elitebook-power-guard.timer >/dev/null 2>&1 || true
   systemctl disable --now elitebook-power-guard.service >/dev/null 2>&1 || true
 
-  rm -f /etc/systemd/system/elitebook-steam-game-watcher.service
-  rm -f /etc/systemd/system/elitebook-idle-watcher.service
   rm -f /etc/systemd/system/elitebook-thermal-profile.service
+  rm -f /etc/systemd/system/elitebook-thermal-profile.service.d/10-installer.conf
+  rmdir /etc/systemd/system/elitebook-thermal-profile.service.d >/dev/null 2>&1 || true
   rm -f /etc/systemd/system/elitebook-power-guard.service
   rm -f /etc/systemd/system/elitebook-power-guard.timer
-  rm -f /etc/udev/rules.d/90-elitebook-thermal-profile.rules
-  rm -f /etc/systemd/system-sleep/elitebook-thermal-profile
   rm -f /etc/systemd/system/systemd-hibernate.service.d/10-elitebook-preflight.conf
   rm -f /etc/systemd/system/systemd-suspend-then-hibernate.service.d/10-elitebook-preflight.conf
   rmdir /etc/systemd/system/systemd-hibernate.service.d >/dev/null 2>&1 || true
   rmdir /etc/systemd/system/systemd-suspend-then-hibernate.service.d >/dev/null 2>&1 || true
   rm -f /usr/local/sbin/elitebook-hibernate-preflight
-  rm -f /usr/local/sbin/elitebook-steam-game-watcher
-  rm -f /usr/local/sbin/elitebook-idle-watcher
   rm -f /usr/local/sbin/elitebook-thermal-profile
   rm -f /usr/local/sbin/elitebook_common.py
+  rm -f /usr/local/sbin/elitebook_profiles.py
+  rm -f /usr/local/sbin/elitebook_engine.py
   rm -f /usr/local/sbin/elitebook-power-guard
   rm -f /run/elitebook-thermal-profile/current
-  rm -f /run/elitebook-thermal-profile/steam-game-watcher
   rm -f /run/elitebook-thermal-profile/idle-watcher
   rm -f /run/elitebook-thermal-profile/guard
   rm -f /run/elitebook-thermal-profile/fallback

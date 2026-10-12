@@ -72,12 +72,12 @@ jobs:
           echo "--- files landed in distribution paths ---"
           test -x /usr/bin/elitebook-thermal-profile
           test -x /usr/bin/elitebook-power-guard
-          test -x /usr/bin/elitebook-idle-watcher
-          test -x /usr/bin/elitebook-steam-game-watcher
+          test -f /usr/lib/elitebook-thermal-profile/elitebook_common.py
+          test -f /usr/lib/elitebook-thermal-profile/elitebook_profiles.py
+          test -f /usr/lib/elitebook-thermal-profile/elitebook_engine.py
+          test ! -e /usr/bin/elitebook_common.py
           test -f /usr/lib/systemd/system/elitebook-thermal-profile.service
           test -f /usr/lib/systemd/system/elitebook-power-guard.timer
-          test -f /usr/lib/udev/rules.d/90-elitebook-thermal-profile.rules
-          test -x /usr/lib/systemd/system-sleep/elitebook-thermal-profile
 
           echo "--- the hibernate preflight must not ship here ---"
           test ! -e /usr/bin/elitebook-hibernate-preflight
@@ -85,16 +85,13 @@ jobs:
           echo "--- source-installer paths were rewritten ---"
           grep -q "/usr/bin/elitebook-thermal-profile" /usr/lib/systemd/system/elitebook-thermal-profile.service
           if grep -rq "/usr/local/sbin" /usr/bin/elitebook-power-guard \
-            /usr/bin/elitebook-steam-game-watcher \
-            /usr/lib/systemd/system/elitebook-*.service \
-            /usr/lib/systemd/system-sleep/elitebook-thermal-profile; then
+            /usr/lib/systemd/system/elitebook-*.service; then
             echo "a /usr/local/sbin path survived packaging" >&2
             exit 1
           fi
 
           echo "--- units ship inert: installing must not tune hardware ---"
-          for unit in elitebook-thermal-profile.service elitebook-idle-watcher.service \
-            elitebook-steam-game-watcher.service elitebook-power-guard.timer; do
+          for unit in elitebook-thermal-profile.service elitebook-power-guard.timer; do
             state="$(systemctl is-enabled "$unit" 2>/dev/null || true)"
             if [ "$state" != "disabled" ]; then
               echo "$unit should ship disabled, got '${state:-unknown}'" >&2

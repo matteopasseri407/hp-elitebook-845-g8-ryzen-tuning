@@ -38,7 +38,9 @@ Rembrandt models (6000-series) and unlisted hardware require `ELITEBOOK_THERMAL_
 | `gaming` | Steam game running | on | uncapped | `balance_performance` | 30 W | 23 W | 92 °C |
 | `cool` | Quiet office or bed use | on | uncapped | `power` | 22 W | 12 W | 85 °C |
 
-Custom limits can be set in `/etc/elitebook-thermal-profile/profiles.conf` without touching code.
+Custom limits can be set in `/etc/elitebook-thermal-profile/profiles.conf` without touching code. The service picks up edits within about five seconds.
+
+One service, `elitebook-thermal-profile.service`, chooses the profile and is the only thing that writes power settings. A battery at or below 20% forces `battery-saver`, even over a manual choice. Otherwise a manual choice wins, then a running Steam game (`gaming`), then the `ac` or `battery` profile. Periods of idle add a lighter overlay on top, which this table does not show. On battery the VRM peak current limit (45 A by default) holds whatever profile runs, a manual or game profile included, because an all-core burst on battery can otherwise switch the laptop off.
 
 ---
 
@@ -67,8 +69,6 @@ sudo ./scripts/install.sh --build-ryzenadj --with-gnome-extension
 ### Enable Services
 ```bash
 sudo systemctl enable --now elitebook-thermal-profile.service
-sudo systemctl enable --now elitebook-idle-watcher.service
-sudo systemctl enable --now elitebook-steam-game-watcher.service
 sudo systemctl enable --now elitebook-power-guard.timer
 sudo systemctl start elitebook-power-guard.service
 ```
@@ -85,6 +85,7 @@ elitebook-thermal-profile status
 elitebook-thermal-profile status --json
 
 # Manually switch profile (auto follows AC/battery/low-battery rules)
+# These ask the running service; no edits to system files are needed.
 sudo elitebook-thermal-profile auto
 sudo elitebook-thermal-profile gaming
 sudo elitebook-thermal-profile cool
@@ -99,7 +100,7 @@ sudo elitebook-power-guard check
 
 Detailed documentation is organized in `docs/`:
 
-- [CODEBASE_MAP.md](CODEBASE_MAP.md): Full AST symbol map, architecture diagram, and IPC state file contracts.
+- [CODEBASE_MAP.md](CODEBASE_MAP.md): Full symbol map, architecture diagram, state file contracts, and the control socket.
 - [docs/fedora.md](docs/fedora.md): Fedora RPM packaging, tuned coexistence, and GNOME power mode masking.
 - [docs/ubuntu.md](docs/ubuntu.md): Ubuntu and Debian installation, secure boot configuration, and systemd setup.
 - [docs/configuration.md](docs/configuration.md): Overriding limits via `/etc/elitebook-thermal-profile/profiles.conf`.

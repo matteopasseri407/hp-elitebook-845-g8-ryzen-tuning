@@ -22,16 +22,16 @@ boost, and CPU frequency when RyzenAdj is unavailable or blocked by lockdown.
 
 ## Package Layout
 
-- Install commands under `/usr/bin/`
-- Install systemd units under `%{_unitdir}`
-- Install udev rules under `%{_udevrulesdir}`
-- Install the system sleep hook under `/usr/lib/systemd/system-sleep/`
+- Install commands under `/usr/bin/` and their Python modules under `/usr/lib/elitebook-thermal-profile/`
+- Install systemd units under `%{_unitdir}`; the main unit is one daemon that
+  handles AC/battery, idle, Steam and resume, so no udev rule or sleep hook is
+  shipped
 - Package the GNOME Shell extension as the optional
   `gnome-shell-extension-elitebook-thermal-profile` subpackage
 - Package RyzenAdj separately; keep it upstream-owned and weakly recommended
 
-The spec patches packaged unit files, helper scripts, sleep hook, and GNOME
-extension away from the source installer's `/usr/local/sbin` paths. This keeps
+The spec patches packaged unit files, helper scripts, and the GNOME extension
+away from the source installer's `/usr/local/sbin` paths. This keeps
 the RPM-owned install inside normal distribution paths while leaving
 `scripts/install.sh` unchanged for manual installs.
 
@@ -75,11 +75,13 @@ supported hardware table:
 
 ```bash
 sudo systemctl enable --now elitebook-thermal-profile.service
-sudo systemctl enable --now elitebook-idle-watcher.service
-sudo systemctl enable --now elitebook-steam-game-watcher.service
 sudo systemctl enable --now elitebook-power-guard.timer
 sudo systemctl start elitebook-power-guard.service
 ```
+
+The daemon also runs the idle overlay and Steam game detection. Turn either off
+with a drop-in that sets `Environment=ELITEBOOK_IDLE_OVERLAY=0` or
+`Environment=ELITEBOOK_STEAM_DETECTION=0` under `[Service]`.
 
 This keeps a public package from changing power policy immediately during
 installation and makes first activation an intentional user action.

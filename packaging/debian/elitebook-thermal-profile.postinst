@@ -19,16 +19,38 @@ EOF
 fi
 
 if [ "$1" = "configure" ]; then
+  # Earlier releases shipped separate watcher units. The daemon replaces them,
+  # and the old units would otherwise keep running after the upgrade.
+  systemctl disable --now elitebook-idle-watcher.service elitebook-steam-game-watcher.service >/dev/null 2>&1 || true
+  rm -f /etc/systemd/system/multi-user.target.wants/elitebook-idle-watcher.service \
+    /etc/systemd/system/multi-user.target.wants/elitebook-steam-game-watcher.service
+fi
+
+# Before 1.0 the service was a oneshot that stayed "active (exited)". On an
+# upgrade it has to be restarted, or the daemon would not run until reboot
+# and nothing would follow the power source in the meantime. A fresh install
+# still enables nothing.
+if [ "$1" = "configure" ] && [ -n "$2" ] && dpkg --compare-versions "$2" lt 1.0.0; then
+  systemctl daemon-reload >/dev/null 2>&1 || true
+  if systemctl is-enabled --quiet elitebook-thermal-profile.service 2>/dev/null; then
+    systemctl restart elitebook-thermal-profile.service || true
+  fi
+fi
+
+if [ "$1" = "configure" ]; then
   cat <<'EOF'
 elitebook-thermal-profile installed.
 
 Nothing has been enabled. Check that your machine is on the supported hardware
 list, then enable the units explicitly:
   sudo systemctl enable --now elitebook-thermal-profile.service
-  sudo systemctl enable --now elitebook-idle-watcher.service
-  sudo systemctl enable --now elitebook-steam-game-watcher.service
   sudo systemctl enable --now elitebook-power-guard.timer
   sudo systemctl start elitebook-power-guard.service
+
+The daemon also runs the idle overlay and Steam game detection. To switch
+either off, add Environment=ELITEBOOK_IDLE_OVERLAY=0 or
+Environment=ELITEBOOK_STEAM_DETECTION=0 under [Service] in a drop-in for
+elitebook-thermal-profile.service.
 
 Full SMU control needs RyzenAdj, which Debian and Ubuntu do not package.
 Without it, only EPP, boost, and CPU frequency controls apply.

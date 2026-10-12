@@ -56,17 +56,22 @@ From the repository root:
 sudo ./scripts/install.sh
 ```
 
-Without the Steam game watcher:
+Without Steam game detection:
 
 ```bash
 sudo ./scripts/install.sh --without-steam-watcher
 ```
 
-Without the idle overlay watcher:
+Without the idle overlay:
 
 ```bash
 sudo ./scripts/install.sh --without-idle-watcher
 ```
+
+Both flags are still accepted. Steam detection and the idle overlay now run
+inside the one service, so these flags do not skip a separate unit. They add a
+systemd drop-in that sets `ELITEBOOK_STEAM_DETECTION=0` or
+`ELITEBOOK_IDLE_OVERLAY=0` for the service.
 
 Without the update guard timer:
 
@@ -110,28 +115,31 @@ package changes, but it does not pin Fedora packages or block kernel updates.
 
 ```bash
 systemctl status elitebook-thermal-profile.service
-systemctl status elitebook-idle-watcher.service
-systemctl status elitebook-steam-game-watcher.service
 systemctl status elitebook-power-guard.timer
 cat /run/elitebook-thermal-profile/current
 cat /run/elitebook-thermal-profile/idle-watcher
 cat /run/elitebook-thermal-profile/guard
 ```
 
-The idle watcher is a staged overlay, not a profile replacement. Soft idle starts after a few quiet seconds with low-power EPP and no frequency cap. Deep idle starts only after longer quiet, then disables boost and uses a temporary low max frequency. Any real CPU load restores the current `ac`, `battery`, `gaming`, or manual profile.
+The idle overlay is a staged step inside the service, not a profile replacement. Soft idle starts after a few quiet seconds with low-power EPP and no frequency cap. Deep idle starts only after longer quiet, then caps the frequency at 1.8 GHz (below the base clock, so boost cannot engage) and lowers the SMU limits. Any real CPU load restores the profile in force: `ac`, `battery`, `gaming`, or the manual choice. The state file keeps the name `idle-watcher` from the earlier separate watcher, and the GNOME indicator reads it.
 
 The GNOME indicator keeps the manual surface small on purpose: `Auto`, `Game`, and `Quiet`. Battery-specific profiles and the `performance` profile are still active underneath through automation or the CLI, but they are shown as current state instead of extra daily buttons.
 
 ## AC/Battery Automation
 
-The udev rules trigger when `power_supply` devices with `POWER_SUPPLY_TYPE=Mains` or `POWER_SUPPLY_TYPE=Battery` change state. The battery rule is what lets `auto` switch into `battery-saver` as charge drops, not only when AC is unplugged.
+The service reads the power source and the battery level itself, once a second.
+It does not depend on udev events. A charge that drops to the `battery-saver`
+threshold (20% by default) switches the profile in the same way as unplugging
+the charger does.
 
 If your laptop exposes a different power supply layout, inspect it with:
 
 ```bash
-udevadm info --query=property --path=/sys/class/power_supply/AC
-udevadm info --query=property --path=/sys/class/power_supply/BAT0
 ls /sys/class/power_supply
+cat /sys/class/power_supply/*/type
 ```
 
-Then adjust `udev/90-elitebook-thermal-profile.rules`.
+The daemon takes AC state from `AC/online` or the first `Mains` supply, and the
+charge level from the first `Battery` supply (`on_ac_power` and
+`battery_device` in `src/elitebook_common.py`). When none of them answers, the
+daemon treats the machine as running on battery.

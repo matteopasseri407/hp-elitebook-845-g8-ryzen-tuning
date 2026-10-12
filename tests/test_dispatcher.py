@@ -63,6 +63,8 @@ def _write_fixture(root: Path) -> dict[str, str]:
         "ELITEBOOK_POWER_SUPPLY_DIR": str(root / "power-supply"),
         "ELITEBOOK_PROFILE_CONF": str(root / "absent.conf"),
         "ELITEBOOK_HWMON_DIR": str(root / "hwmon"),
+        "ELITEBOOK_PCI_DEVICES_DIR": str(root / "pci"),
+        "ELITEBOOK_DRM_DIR": str(root / "drm"),
         "RYZENADJ": str(ryzenadj),
         "PATH": f"{root / 'emptybin'}:/usr/bin:/bin",
     }
@@ -121,7 +123,7 @@ class DispatcherExtrasTests(unittest.TestCase):
         return json.loads(proc.stdout)
 
     def test_status_json_reports_applied_profile(self) -> None:
-        proc = _run(self.env, "cool")
+        proc = _run(self.env, "apply-once", "cool")
         self.assertEqual(proc.returncode, 0, msg=proc.stderr)
 
         payload = self._status_json()
@@ -137,7 +139,7 @@ class DispatcherExtrasTests(unittest.TestCase):
         self.assertIn("error", json.loads(proc.stdout))
 
     def test_reapply_does_not_rewrite_identical_sysfs(self) -> None:
-        proc = _run(self.env, "cool")
+        proc = _run(self.env, "apply-once", "cool")
         self.assertEqual(proc.returncode, 0, msg=proc.stderr)
 
         watched = [
@@ -147,7 +149,7 @@ class DispatcherExtrasTests(unittest.TestCase):
         ]
         before = [path.stat().st_mtime_ns for path in watched]
 
-        proc = _run(self.env, "cool")
+        proc = _run(self.env, "apply-once", "cool")
         self.assertEqual(proc.returncode, 0, msg=proc.stderr)
         after = [path.stat().st_mtime_ns for path in watched]
 
@@ -162,14 +164,14 @@ class DispatcherExtrasTests(unittest.TestCase):
         )
         self.env["ELITEBOOK_PROFILE_CONF"] = str(conf)
 
-        proc = _run(self.env, "ac")
+        proc = _run(self.env, "apply-once", "ac")
         self.assertEqual(proc.returncode, 0, msg=proc.stderr)
         self.assertIn("line 3", proc.stderr)
         self.assertIn("outside the safe range", proc.stderr)
         self.assertEqual(_state_value(self.root, "slow_mw"), "18000")
 
     def test_status_json_reports_battery_defaults(self) -> None:
-        proc = _run(self.env, "battery")
+        proc = _run(self.env, "apply-once", "battery")
         self.assertEqual(proc.returncode, 0, msg=proc.stderr)
 
         payload = self._status_json()
@@ -189,7 +191,7 @@ class DispatcherExtrasTests(unittest.TestCase):
         )
         self.env["ELITEBOOK_PROFILE_CONF"] = str(conf)
 
-        proc = _run(self.env, "battery")
+        proc = _run(self.env, "apply-once", "battery")
         self.assertEqual(proc.returncode, 0, msg=proc.stderr)
 
         payload = self._status_json()
@@ -203,3 +205,87 @@ class DispatcherExtrasTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipIf(NEEDS_ROOT, "needs root or passwordless sudo")
+class SystemAutoDeviceTests(unittest.TestCase):
+    """Automatic choice on battery: low battery guard and idle devices."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+        self.env = _write_fixture(self.root)
+        supplies = self.root / "power-supply"
+        (supplies / "AC").mkdir()
+        (supplies / "AC" / "type").write_text("Mains\n", encoding="utf-8")
+        (supplies / "AC" / "online").write_text("0\n", encoding="utf-8")
+        (supplies / "BAT0").mkdir()
+        (supplies / "BAT0" / "type").write_text("Battery\n", encoding="utf-8")
+        (supplies / "BAT0" / "capacity").write_text("80\n", encoding="utf-8")
+        xhci = self.root / "pci" / "0000:04:00.3"
+        (xhci / "power").mkdir(parents=True)
+        (xhci / "power" / "control").write_text("on\n", encoding="utf-8")
+        (xhci / "class").write_text("0x0c0330\n", encoding="utf-8")
+        (self.root / "drivers" / "xhci_hcd").mkdir(parents=True)
+        (xhci / "driver").symlink_to(self.root / "drivers" / "xhci_hcd")
+        self.panel = (
+            self.root / "drm" / "card1-eDP-1" / "amdgpu" / "panel_power_savings"
+        )
+        self.panel.parent.mkdir(parents=True)
+        self.panel.write_text("0\n", encoding="utf-8")
+
+    def tearDown(self) -> None:
+        try:
+            self._tmp.cleanup()
+        except PermissionError:
+            subprocess.run(
+                ["sudo", "-n", "rm", "-rf", self._tmp.name],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            )
+
+    def _xhci_control(self) -> str:
+        path = self.root / "pci" / "0000:04:00.3" / "power" / "control"
+        return path.read_text(encoding="utf-8").strip()
+
+    def test_low_battery_still_switches_profile(self) -> None:
+        self.assertEqual(_run(self.env, "apply-once", "auto").returncode, 0)
+        (self.root / "power-supply" / "BAT0" / "capacity").write_text(
+            "15\n", encoding="utf-8"
+        )
+
+        proc = _run(self.env, "apply-once", "auto")
+        self.assertEqual(proc.returncode, 0, msg=proc.stderr)
+        self.assertEqual(_state_value(self.root, "profile"), "battery-saver")
+        self.assertEqual(self.panel.read_text(encoding="utf-8").strip(), "3")
+
+    def test_battery_powers_devices_down_and_ac_restores_them(self) -> None:
+        self.assertEqual(_run(self.env, "apply-once", "auto").returncode, 0)
+        self.assertEqual(self._xhci_control(), "auto")
+        self.assertEqual(self.panel.read_text(encoding="utf-8").strip(), "1")
+        self.assertEqual(_state_value(self.root, "runtime_pm"), "auto")
+        self.assertEqual(_state_value(self.root, "panel_power_savings"), "1")
+
+        (self.root / "power-supply" / "AC" / "online").write_text(
+            "1\n", encoding="utf-8"
+        )
+        proc = _run(self.env, "apply-once", "auto")
+        self.assertEqual(proc.returncode, 0, msg=proc.stderr)
+        self.assertEqual(_state_value(self.root, "profile"), "ac")
+        self.assertEqual(self._xhci_control(), "on")
+        self.assertEqual(self.panel.read_text(encoding="utf-8").strip(), "0")
+        self.assertEqual(_state_value(self.root, "runtime_pm"), "default")
+
+    def test_profile_conf_overrides_device_policy(self) -> None:
+        conf = self.root / "profiles.conf"
+        conf.write_text(
+            "BATTERY_RUNTIME_PM=default\nBATTERY_PANEL_POWER_SAVINGS=0\n",
+            encoding="utf-8",
+        )
+        self.env["ELITEBOOK_PROFILE_CONF"] = str(conf)
+
+        proc = _run(self.env, "apply-once", "auto")
+        self.assertEqual(proc.returncode, 0, msg=proc.stderr)
+        self.assertEqual(self._xhci_control(), "on")
+        self.assertEqual(self.panel.read_text(encoding="utf-8").strip(), "0")

@@ -32,8 +32,6 @@ EOF
 }
 
 install -D -m 0755 src/elitebook-thermal-profile "$tmp/usr/local/sbin/elitebook-thermal-profile"
-install -D -m 0755 src/elitebook-idle-watcher "$tmp/usr/local/sbin/elitebook-idle-watcher"
-install -D -m 0755 src/elitebook-steam-game-watcher "$tmp/usr/local/sbin/elitebook-steam-game-watcher"
 install -D -m 0755 src/elitebook-power-guard "$tmp/usr/local/sbin/elitebook-power-guard"
 install -D -m 0755 src/elitebook-hibernate-preflight "$tmp/usr/local/sbin/elitebook-hibernate-preflight"
 install -d -m 0755 "$tmp/etc/systemd/system" "$tmp/usr/lib/systemd/system"

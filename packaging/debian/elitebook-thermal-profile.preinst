@@ -1,0 +1,16 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
+set -e
+
+# Releases before 1.0 shipped separate idle and Steam watcher units, which
+# the daemon replaces. Disable them now, while their unit files still exist:
+# after the upgrade removes the files, systemctl can no longer clean up their
+# enablement symlinks.
+if [ "$1" = "upgrade" ] && [ -n "$2" ] && dpkg --compare-versions "$2" lt 1.0.0; then
+  systemctl disable --now elitebook-idle-watcher.service \
+    elitebook-steam-game-watcher.service >/dev/null 2>&1 || true
+fi
+
+#DEBHELPER#
+
+exit 0

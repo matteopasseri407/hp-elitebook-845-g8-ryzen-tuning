@@ -1,36 +1,56 @@
 [Unit]
-Description=Apply HP EliteBook 845 G8 Ryzen thermal profile
+Description=HP EliteBook 845 G8 Ryzen thermal profile daemon
 Documentation=https://github.com/matteopasseri407/hp-elitebook-845-g8-ryzen-tuning
+# On Fedora the daemon also selects tuned profiles.
 After=tuned.service
 Wants=tuned.service
-# One AC plug/unplug can emit several power_supply change events (Mains
-# online, Battery status, capacity) within seconds. The default rate limit
-# of 5 starts per 10s drops the profile switch for the burst's last events,
-# leaving the wrong profile applied. The service is an idempotent oneshot
-# serialized by an internal dispatcher lock, so disable start rate limiting.
-StartLimitIntervalSec=0
+# A daemon that keeps crashing should stop retrying instead of spending
+# battery on restarts; the power guard timer starts it again later.
+StartLimitIntervalSec=600
+StartLimitBurst=10
 
 [Service]
-Type=oneshot
-Environment=ELITEBOOK_PROFILE_SOURCE=system-auto
+# The daemon is the only writer of power settings: it follows the power
+# source, the battery level, idle time and Steam games, and rewrites every
+# setting hourly and after a resume. CLI commands reach it over a root-only
+# socket in the runtime directory.
+Type=notify
+NotifyAccess=main
+ExecStart=/usr/local/sbin/elitebook-thermal-profile daemon
+Restart=on-failure
+RestartSec=5s
+# Exit 78 (EX_CONFIG): unsupported hardware or a bad RYZENADJ path.
+RestartPreventExitStatus=78
+WatchdogSec=30s
 Environment=ELITEBOOK_LOW_BATTERY_THRESHOLD=20
-ExecStart=/usr/local/sbin/elitebook-thermal-profile auto
+Environment=ELITEBOOK_IDLE_SAMPLE_INTERVAL=1
+Environment=ELITEBOOK_STEAM_WATCH_INTERVAL_AC=30
+Environment=ELITEBOOK_STEAM_WATCH_INTERVAL_BATTERY=120
+Environment=ELITEBOOK_STEAM_WATCH_INTERVAL_ACTIVE=20
 RuntimeDirectory=elitebook-thermal-profile
 RuntimeDirectoryMode=0755
 RuntimeDirectoryPreserve=yes
+Nice=10
+IOSchedulingClass=idle
+# Headroom for the RyzenAdj and tuned-adm children it starts.
+CPUQuota=10%
+MemoryMax=64M
 
 # Hardening. ProtectKernelTunables is intentionally left off because the
-# script writes CPU policy hints under /sys/devices/system/cpu/cpufreq.
+# daemon writes CPU policy, PCI runtime PM and panel power hints under /sys.
 NoNewPrivileges=yes
-# RyzenAdj's fallback path needs raw I/O plus PCI config access.
-CapabilityBoundingSet=CAP_SYS_ADMIN CAP_SYS_RAWIO CAP_SYS_NICE CAP_DAC_OVERRIDE
+# RyzenAdj's fallback path needs raw I/O plus PCI config access; reading a
+# Steam game's environment in /proc needs CAP_SYS_PTRACE.
+CapabilityBoundingSet=CAP_SYS_ADMIN CAP_SYS_RAWIO CAP_SYS_NICE CAP_DAC_OVERRIDE CAP_SYS_PTRACE
 AmbientCapabilities=
 ProtectSystem=strict
 ReadWritePaths=/run/elitebook-thermal-profile
 ProtectHome=yes
-PrivateNetwork=yes
+# No PrivateNetwork: the kernel sends power supply uevents only into the host
+# network namespace. IP traffic stays blocked by IPAddressDeny and the
+# address family list.
 PrivateTmp=yes
-RestrictAddressFamilies=AF_UNIX
+RestrictAddressFamilies=AF_UNIX AF_NETLINK
 IPAddressDeny=any
 RestrictNamespaces=yes
 RestrictRealtime=yes
@@ -45,12 +65,12 @@ ProtectHostname=yes
 ProtectKernelLogs=yes
 ProtectKernelModules=yes
 ProtectControlGroups=yes
-ProtectProc=invisible
 KeyringMode=private
 DevicePolicy=closed
 DeviceAllow=/dev/mem rw
 DeviceAllow=/dev/ryzen_smu rw
 UMask=0077
+RemoveIPC=yes
 
 [Install]
 WantedBy=multi-user.target

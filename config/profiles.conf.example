@@ -18,8 +18,13 @@
 #             EPP                                  performance,
 #                                                  balance_performance,
 #                                                  balance_power, power
+#             RUNTIME_PM                           auto (idle PCI devices power
+#                                                  down) or default (kernel's)
+#             PANEL_POWER_SAVINGS                  0 (off) to 4, amdgpu panel
+#                                                  backlight saving
 #
 # Accepted ranges: power 4000-45000 mW, TCTL_C 60-100, VRMMAX_MA 15000-120000 mA,
+# PANEL_POWER_SAVINGS 0-4,
 # MAX_FREQ_KHZ 1000000-5000000 kHz or uncapped. A value outside its range, or one
 # that is not valid, is refused with a message on stderr and the built-in default
 # is used instead: a typo here cannot leave the machine untuned, and cannot be used
@@ -46,4 +51,8 @@
 #BATTERY_EPP=power
 #BATTERY_VRMMAX_MA=40000
 #BATTERY_BOOST=off
+
+# Panel power saving dims the backlight and boosts contrast to compensate, so
+# colors shift slightly. Turn it off on battery for color-critical work:
+#BATTERY_PANEL_POWER_SAVINGS=0
 

@@ -1,146 +1,86 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""HP EliteBook thermal profile dispatcher.
+"""HP EliteBook thermal profile: the daemon and its command line.
 
-Applies AC/battery power profiles via AMD P-State sysfs, tuned (on Fedora),
-and RyzenAdj SMU limits. Keeps the exact CLI, environment variables, state
-file format and warning strings of the original bash dispatcher so callers
-(systemd, udev, sleep hook, watchers, GNOME extension, power-guard) keep
-working unchanged.
+``elitebook-thermal-profile daemon`` is the systemd service and the only
+process that writes power settings (see elitebook_engine). Every other
+command is a client: profile names and ``auto`` ask the daemon over a root-only
+Unix socket, ``status`` reads the state files, and ``apply-once`` runs a
+single reconcile pass without a daemon, for tests and for rescue when the
+service cannot start.
 
-Only the standard library is used: this runs as root from systemd/udev and
-must not grow new runtime dependencies. Shared sysfs helpers live in
-``elitebook_common`` next to this file.
+The command line, state files and warning texts match the dispatcher this
+replaced, so the GNOME extension and the power guard keep working unchanged.
+Standard library only.
 """
+
+from __future__ import annotations
 
 import json
 import os
-import re
-import shutil
-import subprocess
+import select
+import signal
+import socket
+import struct
 import sys
+import time
 import typing
-from datetime import datetime
 from pathlib import Path
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# Modules sit next to the script in a source install and in a private
+# library directory in the distribution packages.
+for _lib in (
+    "/usr/lib/elitebook-thermal-profile",
+    os.path.dirname(os.path.abspath(__file__)),
+):
+    if _lib not in sys.path:
+        sys.path.insert(0, _lib)
 
 import elitebook_common as common  # noqa: E402
+import elitebook_engine as engine_mod  # noqa: E402
+import elitebook_profiles as profiles  # noqa: E402
 
-ELITEBOOK_VERSION = "0.9.0"
-
-STATE_DIR = Path(
-    os.environ.get("ELITEBOOK_THERMAL_STATE_DIR", "/run/elitebook-thermal-profile")
-)
-STATE_FILE = STATE_DIR / "current"
-THERMAL_FILE = STATE_DIR / "thermal"
-POWER_SUPPLY_DIR = Path(
-    os.environ.get("ELITEBOOK_POWER_SUPPLY_DIR", "/sys/class/power_supply")
-)
-DMI_ID_DIR = Path(os.environ.get("ELITEBOOK_DMI_ID_DIR", "/sys/class/dmi/id"))
-CPUINFO_PATH = Path(os.environ.get("ELITEBOOK_CPUINFO_PATH", "/proc/cpuinfo"))
-CPUFREQ_DIR = Path(
-    os.environ.get("ELITEBOOK_CPUFREQ_DIR", "/sys/devices/system/cpu/cpufreq")
-)
-LOCKDOWN_PATH = Path(
-    os.environ.get("ELITEBOOK_LOCKDOWN_PATH", "/sys/kernel/security/lockdown")
-)
-PROFILE_CONF = Path(
-    os.environ.get(
-        "ELITEBOOK_PROFILE_CONF", "/etc/elitebook-thermal-profile/profiles.conf"
-    )
-)
-HWMON_DIR = Path(os.environ.get("ELITEBOOK_HWMON_DIR", "/sys/class/hwmon"))
-
+ELITEBOOK_VERSION = "1.0.0"
 PROG = "elitebook-thermal-profile"
+EX_CONFIG = 78
 
-SUPPORTED_PRODUCT_SUBSTRINGS = (
-    "EliteBook 835 G7",
-    "EliteBook 835 G8",
-    "EliteBook 835 G9",
-    "EliteBook 845 G7",
-    "EliteBook 845 G8",
-    "EliteBook 845 G9",
-    "ProBook 445 G8",
-    "ProBook 445 G9",
-    "ProBook 455 G8",
-    "ProBook 455 G9",
+
+def _path(key: str, default: str) -> Path:
+    return Path(os.environ.get(key, default))
+
+
+STATE_DIR = _path("ELITEBOOK_THERMAL_STATE_DIR", "/run/elitebook-thermal-profile")
+STATE_FILE = STATE_DIR / "current"
+IDLE_FILE = STATE_DIR / "idle-watcher"
+THERMAL_FILE = STATE_DIR / "thermal"
+CONTROL_SOCKET = STATE_DIR / "control"
+POWER_SUPPLY_DIR = _path("ELITEBOOK_POWER_SUPPLY_DIR", "/sys/class/power_supply")
+DMI_ID_DIR = _path("ELITEBOOK_DMI_ID_DIR", "/sys/class/dmi/id")
+CPUINFO_PATH = _path("ELITEBOOK_CPUINFO_PATH", "/proc/cpuinfo")
+CPUFREQ_DIR = _path("ELITEBOOK_CPUFREQ_DIR", "/sys/devices/system/cpu/cpufreq")
+LOCKDOWN_PATH = _path("ELITEBOOK_LOCKDOWN_PATH", "/sys/kernel/security/lockdown")
+PROFILE_CONF = _path(
+    "ELITEBOOK_PROFILE_CONF", "/etc/elitebook-thermal-profile/profiles.conf"
 )
-CEZANNE_RE = re.compile(r"AMD Ryzen (5|7) PRO (5650U|5750U|5850U)")
-REMBRANDT_RE = re.compile(r"AMD Ryzen (5|7) PRO (6650U|6850U)")
-VALID_EPPS = ("performance", "balance_performance", "balance_power", "power")
+HWMON_DIR = _path("ELITEBOOK_HWMON_DIR", "/sys/class/hwmon")
+PCI_DEVICES_DIR = _path("ELITEBOOK_PCI_DEVICES_DIR", "/sys/bus/pci/devices")
+DRM_DIR = _path("ELITEBOOK_DRM_DIR", "/sys/class/drm")
 
-# (epp, stapm, fast, slow, apu, tctl, boost, max_freq_default, tuned_profile, vrmmax_default)
-# max_freq_default is None for "uncapped", else a kHz string. battery-saver
-# resolves its cap from ELITEBOOK_BATTERY_SAVER_MAX_FREQ_KHZ at runtime.
-# vrmmax_default is None for "stock" (Ryzen stock ~90A on Cezanne), or a mA string.
-BUILTIN_PROFILES = {
-    "ac": (
-        "balance_power",
-        22000,
-        30000,
-        18000,
-        18000,
-        90,
-        "on",
-        None,
-        "balanced",
-        None,
-    ),
-    "performance": (
-        "balance_performance",
-        22000,
-        30000,
-        18000,
-        18000,
-        90,
-        "on",
-        None,
-        "balanced",
-        None,
-    ),
-    "battery": (
-        "balance_power",
-        15000,
-        22000,
-        15000,
-        15000,
-        80,
-        "on",
-        None,
-        "balanced",
-        "45000",
-    ),
-    "battery-saver": (
-        "power",
-        10000,
-        15000,
-        8000,
-        8000,
-        80,
-        "off",
-        "BATTERY_SAVER_ENV",
-        "powersave",
-        "30000",
-    ),
-    "gaming": (
-        "balance_performance",
-        30000,
-        30000,
-        23000,
-        23000,
-        92,
-        "on",
-        None,
-        "balanced",
-        None,
-    ),
-    "cool": ("power", 16000, 22000, 12000, 12000, 85, "on", None, "balanced", "40000"),
-}
+# A wakeup more than this far ahead of the monotonic clock means the machine
+# slept in between: CLOCK_BOOTTIME counts suspend, CLOCK_MONOTONIC does not.
+RESUME_GAP_S = 2.0
+CONFIG_CHECK_S = 5.0
+# Power supply attributes are ACPI calls that can wake the embedded
+# controller, so they are read when the kernel reports a change, plus this
+# often as a safety net in case an event was lost.
+try:
+    POWER_POLL_S = float(os.environ.get("ELITEBOOK_POWER_POLL_INTERVAL", "60"))
+except ValueError:
+    POWER_POLL_S = 60.0
+NETLINK_KOBJECT_UEVENT = getattr(socket, "NETLINK_KOBJECT_UEVENT", 15)
 
 SUDO_PRESERVE_ENV = (
     "RYZENADJ",
-    "ELITEBOOK_PROFILE_SOURCE",
     "ELITEBOOK_THERMAL_FORCE",
     "ELITEBOOK_LOW_BATTERY_THRESHOLD",
     "ELITEBOOK_BATTERY_SAVER_MAX_FREQ_KHZ",
@@ -153,10 +93,15 @@ SUDO_PRESERVE_ENV = (
     "ELITEBOOK_RYZENADJ_SEARCH_PATHS",
     "ELITEBOOK_PROFILE_CONF",
     "ELITEBOOK_HWMON_DIR",
+    "ELITEBOOK_PCI_DEVICES_DIR",
+    "ELITEBOOK_DRM_DIR",
 )
 
-DETECTED_PRODUCT = ""
-DETECTED_CPU = ""
+SERVICE_DOWN = (
+    "the elitebook-thermal-profile service is not running. Start it with "
+    "'sudo systemctl start elitebook-thermal-profile', or apply a profile "
+    f"without it: sudo {PROG} apply-once <profile>"
+)
 
 
 def die(message: str) -> typing.NoReturn:
@@ -164,15 +109,11 @@ def die(message: str) -> typing.NoReturn:
     raise SystemExit(1)
 
 
-def warn(message: str) -> None:
-    print(f"{PROG}: warning: {message}", file=sys.stderr)
-
-
 def usage() -> None:
     print(
         f"""Usage: {PROG} [COMMAND]
 
-Profiles (need root):
+Profiles (need root; the service applies them):
   auto              Pick by power source and battery level
   ac                Plugged in
   performance       Plugged in, more responsive
@@ -184,18 +125,20 @@ Profiles (need root):
 Commands:
   status            Show what is applied right now (no root needed)
   status --json     Same as status, as JSON for scripts (no root needed)
+  reassert          Ask the service to rewrite every setting now
+  daemon            Run the service (systemd starts this)
+  apply-once [P]    Apply profile P (default auto) once, without the service
   --check-hardware  Verify this machine is supported
   --version         Print the version
   -h, --help        Show this help
 
 Configuration:
   {PROFILE_CONF}
-  Overrides individual profile values and survives package upgrades.
-  See docs/configuration.md.
+  Overrides individual profile values and survives package upgrades. The
+  service rereads it within seconds of a change. See docs/configuration.md.
 
 Environment:
   RYZENADJ=/path/to/ryzenadj
-  ELITEBOOK_PROFILE_SOURCE=manual|auto|system-auto|steam-game-watcher
   ELITEBOOK_THERMAL_FORCE=1   skip the supported-hardware guard
   ELITEBOOK_LOW_BATTERY_THRESHOLD=20
   ELITEBOOK_BATTERY_SAVER_MAX_FREQ_KHZ=1800000""",
@@ -204,63 +147,25 @@ Environment:
 
 
 def truthy(value: str | None) -> bool:
-    return (value or "") in ("1", "true", "TRUE", "yes", "YES", "on", "ON")
+    return (value or "").strip().lower() in ("1", "true", "yes", "on")
 
 
-def is_supported_product(product: str) -> bool:
-    return any(sub in product for sub in SUPPORTED_PRODUCT_SUBSTRINGS)
+# --- status ----------------------------------------------------------------
+
+
+def read_state(path: Path) -> dict[str, str]:
+    return common.read_key_value_file(path)
 
 
 def on_ac_power() -> bool:
     return common.on_ac_power(POWER_SUPPLY_DIR)
 
 
-def battery_capacity() -> str | None:
-    value = common.battery_capacity(POWER_SUPPLY_DIR)
-    return None if value is None else str(value)
-
-
-def battery_is_low() -> bool:
-    threshold_raw = os.environ.get("ELITEBOOK_LOW_BATTERY_THRESHOLD", "20")
-    if not common.is_uint(threshold_raw):
-        die("ELITEBOOK_LOW_BATTERY_THRESHOLD must be an integer percentage")
-    if int(threshold_raw) <= 0:
-        return False
-    if on_ac_power():
-        return False
-    capacity = battery_capacity()
-    if capacity is None:
-        return False
-    return int(capacity) <= int(threshold_raw)
-
-
-def cpu_temperature_c() -> str | None:
-    value = common.cpu_temperature_c(HWMON_DIR)
-    return None if value is None else str(value)
-
-
-def read_key_value_file(path: Path) -> dict[str, str]:
-    return common.read_key_value_file(path)
-
-
-def current_value(key: str) -> str:
-    return read_key_value_file(STATE_FILE).get(key, "")
-
-
-def thermal_value(key: str) -> str:
-    return read_key_value_file(THERMAL_FILE).get(key, "")
-
-
-def print_thermal_record() -> None:
-    if not THERMAL_FILE.is_file():
-        try:
-            THERMAL_FILE.stat()
-        except OSError:
-            return
-    peak = thermal_value("peak_c")
-    target = thermal_value("target_c")
-    samples = thermal_value("samples")
-    over = thermal_value("over_target")
+def print_thermal_record(thermal: dict[str, str]) -> None:
+    peak = thermal.get("peak_c", "")
+    target = thermal.get("target_c", "")
+    samples = thermal.get("samples", "")
+    over = thermal.get("over_target", "")
     if not (common.is_uint(peak) and int(peak) > 0):
         return
     if common.is_uint(target) and int(target) > 0:
@@ -270,172 +175,155 @@ def print_thermal_record() -> None:
     else:
         print(f"Peak:         {peak} C since this profile was applied")
     if common.is_uint(samples) and common.is_uint(over) and int(samples) > 0:
-        percent = int(over) * 100 // int(samples)
         if int(over) == 0:
             print(f"Above target: never, over {samples} samples")
         else:
+            percent = int(over) * 100 // int(samples)
             print(f"Above target: {percent}% of {samples} samples")
 
 
 def print_status() -> None:
-    if not STATE_FILE.is_file():
-        try:
-            STATE_FILE.stat()
-        except OSError:
-            print(f"No profile has been applied yet (no state file at {STATE_FILE}).")
-            print("Apply one with: sudo elitebook-thermal-profile auto")
-            return
-    profile = current_value("profile")
-    source = current_value("source")
-    smu = current_value("smu")
-    epp = current_value("epp")
-    boost = current_value("boost")
-    max_freq = current_value("max_freq")
-    fast = current_value("fast_mw")
-    slow = current_value("slow_mw")
-    tctl = current_value("tctl_c")
-    updated = current_value("updated")
-
+    if not STATE_FILE.exists():
+        print(f"No profile has been applied yet (no state file at {STATE_FILE}).")
+        print("Start the service with: sudo systemctl start elitebook-thermal-profile")
+        return
+    state = read_state(STATE_FILE)
+    idle = read_state(IDLE_FILE)
+    profile = state.get("profile", "")
+    source = state.get("source", "")
+    smu = state.get("smu", "")
+    max_freq = state.get("max_freq", "")
     source_labels = {
         "manual": "set manually",
         "auto": "automatic (AC/battery)",
-        "system-auto": "system automation",
+        "system-auto": "automatic (AC/battery)",
         "steam-game-watcher": "Steam game detected",
         "guard-fallback": "update guard fallback",
         "": "unknown",
     }
-    source_text = source_labels.get(source, source)
-
-    if max_freq == "uncapped" or max_freq == "":
+    if max_freq in ("uncapped", ""):
         freq_text = "uncapped"
+    elif max_freq.isdecimal():
+        freq_text = f"{int(max_freq) // 1000} MHz"
     else:
-        try:
-            freq_text = f"{int(max_freq) // 1000} MHz"
-        except ValueError:
-            freq_text = max_freq
+        freq_text = max_freq
 
-    print(f"Profile:      {profile or 'unknown'} ({source_text})")
-
-    if smu == "ok":
-        print("SMU limits:   applied")
-    elif smu == "unavailable":
-        print("SMU limits:   NOT applied - RyzenAdj is not installed")
-    elif smu == "blocked":
-        print("SMU limits:   NOT applied - blocked by kernel lockdown (Secure Boot)")
-    elif smu == "failed":
-        print("SMU limits:   NOT applied - RyzenAdj returned an error")
-    else:
-        print("SMU limits:   unknown (state written by an older version)")
-
+    print(f"Profile:      {profile or 'unknown'} ({source_labels.get(source, source)})")
+    smu_lines = {
+        "ok": "applied",
+        "unavailable": "NOT applied - RyzenAdj is not installed",
+        "blocked": "NOT applied - blocked by kernel lockdown (Secure Boot)",
+        "failed": "NOT applied - RyzenAdj returned an error",
+    }
+    print(f"SMU limits:   {smu_lines.get(smu, 'unknown')}")
     print(
-        f"CPU policy:   EPP {epp or 'unknown'}, boost {boost or 'unknown'}, max frequency {freq_text}"
+        f"CPU policy:   EPP {state.get('epp') or 'unknown'}, boost "
+        f"{state.get('boost') or 'unknown'}, max frequency {freq_text}"
     )
 
-    def watts(value: str) -> str:
-        try:
-            return str(int(value or "0") // 1000)
-        except ValueError:
-            return "0"
+    def watts(key: str) -> str:
+        value = state.get(key, "")
+        return str(int(value) // 1000) if value.isdecimal() else "0"
 
-    vrmmax = current_value("vrmmax_ma")
-    vrm_text = f", VRM max {int(vrmmax) // 1000} A" if common.is_uint(vrmmax) else ""
-
+    vrmmax = state.get("vrmmax_ma", "")
+    vrm = f", VRM max {int(vrmmax) // 1000} A" if vrmmax.isdecimal() else ""
+    tctl = state.get("tctl_c") or "?"
     if smu == "ok":
         print(
-            f"Power limits: sustained {watts(slow)} W, burst {watts(fast)} W, thermal target {tctl or '?'} C{vrm_text}"
-        )
-    elif smu == "":
-        print(
-            f"Power limits: recorded {watts(slow)} W sustained, {watts(fast)} W burst, {tctl or '?'} C target{vrm_text}"
+            f"Power limits: sustained {watts('slow_mw')} W, burst {watts('fast_mw')} W, "
+            f"thermal target {tctl} C{vrm}"
         )
     else:
         print(
-            f"Power limits: requested {watts(slow)} W sustained / {watts(fast)} W burst / {tctl or '?'} C{vrm_text}, NOT in force"
+            f"Power limits: requested {watts('slow_mw')} W sustained / "
+            f"{watts('fast_mw')} W burst / {tctl} C{vrm}, NOT in force"
         )
 
-    battery = battery_capacity()
-    if battery:
-        if on_ac_power():
-            print(f"Battery:      {battery}% (on AC)")
+    runtime_pm = state.get("runtime_pm", "")
+    panel = state.get("panel_power_savings", "")
+    if runtime_pm or panel:
+        devices = {"auto": "idle devices power down", "default": "kernel defaults"}
+        if panel.isdecimal():
+            panel_text = "off" if panel == "0" else f"level {panel}"
         else:
-            print(f"Battery:      {battery}% (on battery)")
+            panel_text = panel or "unknown"
+        print(
+            f"Devices:      {devices.get(runtime_pm, 'unknown')}, "
+            f"panel power saving {panel_text}"
+        )
 
-    temp = cpu_temperature_c()
-    if temp:
+    if idle.get("active") == "1":
+        print(f"Idle:         {idle.get('stage', 'unknown')} overlay active")
+    else:
+        print("Idle:         off")
+
+    battery = common.battery_capacity(POWER_SUPPLY_DIR)
+    if battery is not None:
+        where = "on AC" if on_ac_power() else "on battery"
+        print(f"Battery:      {battery}% ({where})")
+    temp = common.cpu_temperature_c(HWMON_DIR)
+    if temp is not None:
         print(f"CPU temp:     {temp} C")
-
-    print_thermal_record()
-
-    print(f"Updated:      {updated or 'unknown'}")
+    print_thermal_record(read_state(THERMAL_FILE))
+    print(f"Updated:      {state.get('updated') or 'unknown'}")
 
     if smu and smu != "ok":
         print("")
         print("This machine is running on CPU policy alone. See:")
         print(
-            "  https://github.com/matteopasseri407/hp-elitebook-845-g8-ryzen-tuning/blob/main/docs/troubleshooting.md"
+            "  https://github.com/matteopasseri407/hp-elitebook-845-g8-ryzen-tuning"
+            "/blob/main/docs/troubleshooting.md"
         )
 
 
 def print_status_json() -> None:
-    """Machine-readable status for scripts and monitoring.
-
-    Same sources as print_status, stable sorted keys, always JSON on stdout
-    so `status --json | python3 -c ...` never has to parse human text.
-    """
-    try:
-        STATE_FILE.stat()
-    except OSError:
+    if not STATE_FILE.exists():
         print(json.dumps({"error": f"no state file at {STATE_FILE}"}, sort_keys=True))
         return
-    state = read_key_value_file(STATE_FILE)
-    thermal = read_key_value_file(THERMAL_FILE)
-    battery_raw = common.battery_capacity(POWER_SUPPLY_DIR)
-    temperature = common.cpu_temperature_c(HWMON_DIR)
+    state = read_state(STATE_FILE)
+    idle = read_state(IDLE_FILE)
+    thermal = read_state(THERMAL_FILE)
+
+    def get(key: str, default: str = "unknown") -> str:
+        return state.get(key) or default
+
     payload: dict[str, typing.Any] = {
         "tool": PROG,
         "version": ELITEBOOK_VERSION,
-        "profile": state.get("profile", "unknown") or "unknown",
-        "source": state.get("source", "unknown") or "unknown",
-        "smu": state.get("smu", "unknown") or "unknown",
-        "epp": state.get("epp", "unknown") or "unknown",
-        "boost": state.get("boost", "unknown") or "unknown",
-        "max_freq": state.get("max_freq", "unknown") or "unknown",
-        "vrmmax_ma": state.get("vrmmax_ma", "stock") or "stock",
+        "profile": get("profile"),
+        "source": get("source"),
+        "smu": get("smu"),
+        "epp": get("epp"),
+        "boost": get("boost"),
+        "max_freq": get("max_freq"),
+        "vrmmax_ma": get("vrmmax_ma", "stock"),
         "power_mw": {
-            "stapm": state.get("stapm_mw", "unknown") or "unknown",
-            "fast": state.get("fast_mw", "unknown") or "unknown",
-            "slow": state.get("slow_mw", "unknown") or "unknown",
-            "apu": state.get("apu_mw", "unknown") or "unknown",
+            "stapm": get("stapm_mw"),
+            "fast": get("fast_mw"),
+            "slow": get("slow_mw"),
+            "apu": get("apu_mw"),
         },
-        "tctl_c": state.get("tctl_c", "unknown") or "unknown",
-        "battery_percent": battery_raw,
+        "tctl_c": get("tctl_c"),
+        "runtime_pm": get("runtime_pm"),
+        "panel_power_savings": get("panel_power_savings"),
+        "idle_stage": idle.get("stage", "none")
+        if idle.get("active") == "1"
+        else "none",
+        "battery_percent": common.battery_capacity(POWER_SUPPLY_DIR),
         "on_ac_power": on_ac_power(),
-        "cpu_temp_c": temperature,
+        "cpu_temp_c": common.cpu_temperature_c(HWMON_DIR),
         "thermal": {
             "target_c": thermal.get("target_c"),
             "peak_c": thermal.get("peak_c"),
             "samples": thermal.get("samples"),
             "over_target": thermal.get("over_target"),
         },
-        "updated": state.get("updated", "unknown") or "unknown",
+        "updated": get("updated"),
     }
     print(json.dumps(payload, sort_keys=True))
 
 
-def find_ryzenadj() -> str | None:
-    configured = os.environ.get("RYZENADJ", "")
-    search_raw = os.environ.get(
-        "ELITEBOOK_RYZENADJ_SEARCH_PATHS",
-        "/usr/local/sbin/ryzenadj /usr/local/bin/ryzenadj /usr/bin/ryzenadj",
-    )
-    found = common.find_ryzenadj(configured, search_raw.split())
-    if configured and found is None:
-        die(f"RYZENADJ is set but is not executable: {configured}")
-    return found
-
-
-def kernel_lockdown_mode() -> str:
-    return common.kernel_lockdown_mode(LOCKDOWN_PATH)
+# --- hardware and settings -------------------------------------------------
 
 
 def detect_cpu_model() -> str:
@@ -444,429 +332,588 @@ def detect_cpu_model() -> str:
     except OSError:
         return ""
     for line in text.splitlines():
-        if "model name" not in line:
-            continue
-        if ":" not in line:
-            continue
-        _, _, after = line.partition(":")
-        return after.lstrip(" \t")
+        if "model name" in line and ":" in line:
+            return line.partition(":")[2].lstrip(" \t")
     return ""
 
 
-def assert_supported_hardware() -> None:
-    global DETECTED_PRODUCT, DETECTED_CPU
-    if truthy(os.environ.get("ELITEBOOK_THERMAL_FORCE", "")):
-        return
-    vendor = common.read_trimmed(DMI_ID_DIR / "sys_vendor")
+def check_hardware() -> str:
+    """A description of the supported machine; exits when unsupported."""
     product = common.read_trimmed(DMI_ID_DIR / "product_name")
     cpu = detect_cpu_model()
-    DETECTED_PRODUCT = product
-    DETECTED_CPU = cpu
-    if vendor not in ("HP", "Hewlett-Packard"):
-        die(
-            f"unsupported vendor '{vendor}' (set ELITEBOOK_THERMAL_FORCE=1 to override)"
-        )
-    if not is_supported_product(product):
-        die(
-            f"unsupported product '{product}' (set ELITEBOOK_THERMAL_FORCE=1 to override)"
-        )
-    if CEZANNE_RE.search(cpu):
-        return
-    if REMBRANDT_RE.search(cpu):
-        die(
-            f"known HP AMD Rembrandt hardware '{product}' / '{cpu}' is not enabled yet "
-            "because these SMU limits are only validated on Cezanne "
-            "(set ELITEBOOK_THERMAL_FORCE=1 to override after reviewing profile values)"
-        )
-    die(
-        f"unsupported CPU '{cpu}' (validated Cezanne CPUs: Ryzen PRO 5650U, 5750U, 5850U; "
-        "set ELITEBOOK_THERMAL_FORCE=1 to override)"
+    if truthy(os.environ.get("ELITEBOOK_THERMAL_FORCE")):
+        return "forced"
+    vendor = common.read_trimmed(DMI_ID_DIR / "sys_vendor")
+    problem = profiles.hardware_problem(vendor, product, cpu)
+    if problem:
+        die(problem)
+    return f"{product or 'unknown product'} / {cpu or 'unknown CPU'}"
+
+
+def find_ryzenadj() -> str | None:
+    configured = os.environ.get("RYZENADJ", "")
+    search = os.environ.get(
+        "ELITEBOOK_RYZENADJ_SEARCH_PATHS",
+        "/usr/local/sbin/ryzenadj /usr/local/bin/ryzenadj /usr/bin/ryzenadj",
     )
+    found = common.find_ryzenadj(configured, search.split())
+    if configured and found is None:
+        die(f"RYZENADJ is set but is not executable: {configured}")
+    return found
 
 
-def detect_profile() -> str:
-    if on_ac_power():
-        return "ac"
-    if battery_is_low():
-        return "battery-saver"
-    return "battery"
+def low_battery_threshold() -> int:
+    raw = os.environ.get("ELITEBOOK_LOW_BATTERY_THRESHOLD", "20").strip()
+    if not raw.isdecimal():
+        die("ELITEBOOK_LOW_BATTERY_THRESHOLD must be an integer percentage")
+    return int(raw)
 
 
-def profile_conf_value(key: str) -> tuple[str | None, int]:
-    """Value and 1-based line number of the last matching key, if any."""
+def battery_saver_max_freq() -> int:
+    raw = os.environ.get("ELITEBOOK_BATTERY_SAVER_MAX_FREQ_KHZ", "").strip()
+    if not raw:
+        return profiles.BATTERY_SAVER_MAX_FREQ_KHZ
+    if not raw.isdecimal():
+        die("ELITEBOOK_BATTERY_SAVER_MAX_FREQ_KHZ must be an integer kHz value")
+    return int(raw)
+
+
+def config_mtime() -> float | None:
     try:
-        text = PROFILE_CONF.read_text(encoding="utf-8", errors="ignore")
+        return PROFILE_CONF.stat().st_mtime
     except OSError:
-        return None, 0
-    pattern = re.compile(rf"^\s*{re.escape(key)}\s*=\s*(.*)$")
-    last: str | None = None
-    last_line = 0
-    for lineno, line in enumerate(text.splitlines(), 1):
-        match = pattern.match(line)
-        if match:
-            last = match.group(1)
-            last_line = lineno
-    if last is None:
-        return None, 0
-    last = last.split("#", 1)[0]
-    last = re.sub(r"\s+", "", last)
-    if not last:
-        return None, 0
-    return last, last_line
+        return None
 
 
-def override_uint(key: str, minimum: int, maximum: int, current: str) -> str:
-    value, lineno = profile_conf_value(key)
+def stock_vrmmax(ryzenadj: str | None, log: engine_mod.Log) -> int | None:
+    """The firmware's EDC limit, recorded once per boot before the first write.
+
+    Recorded only when no profile has been applied since boot (no state file
+    yet): reading it later would capture a limit some profile set, not the
+    firmware's. The record lives in /run, so every boot measures again.
+    """
+    record = STATE_DIR / "smu-stock"
+    saved = common.read_key_value_file(record).get("vrmmax_ma", "")
+    if saved.isdecimal():
+        return int(saved)
+    if ryzenadj is None or STATE_FILE.exists():
+        return None
+    value = engine_mod.read_stock_vrmmax_ma(ryzenadj)
     if value is None:
-        return current
-    if not common.is_uint(value):
-        warn(
-            f"{PROFILE_CONF} line {lineno}: {key}='{value}' is not an integer; "
-            f"keeping {current}"
-        )
-        return current
-    number = int(value)
-    if number < minimum or number > maximum:
-        warn(
-            f"{PROFILE_CONF} line {lineno}: {key}={value} is outside the safe "
-            f"range {minimum}-{maximum}; keeping {current}"
-        )
-        return current
-    return value
-
-
-def override_epp(key: str, current: str) -> str:
-    value, lineno = profile_conf_value(key)
-    if value is None:
-        return current
-    if value in VALID_EPPS:
-        return value
-    warn(
-        f"{PROFILE_CONF} line {lineno}: {key}='{value}' is not a valid EPP "
-        f"hint; keeping {current}"
-    )
-    return current
-
-
-def override_boost(key: str, current: str) -> str:
-    value, lineno = profile_conf_value(key)
-    if value is None:
-        return current
-    lower = value.lower()
-    if lower in ("on", "1", "yes", "true"):
-        return "on"
-    if lower in ("off", "0", "no", "false"):
-        return "off"
-    warn(
-        f"{PROFILE_CONF} line {lineno}: {key}='{value}' is not a valid boost "
-        f"setting (expected on/off); keeping {current}"
-    )
-    return current
-
-
-def override_max_freq(key: str, current: str) -> str:
-    value, lineno = profile_conf_value(key)
-    if value is None:
-        return current
-    lower = value.lower()
-    if lower in ("uncapped", "none", "0"):
-        return "uncapped"
-    if not common.is_uint(value):
-        warn(
-            f"{PROFILE_CONF} line {lineno}: {key}='{value}' must be an integer kHz "
-            f"or 'uncapped'; keeping {current}"
-        )
-        return current
-    khz = int(value)
-    if khz < 1000000 or khz > 5000000:
-        warn(
-            f"{PROFILE_CONF} line {lineno}: {key}={value} is outside the safe "
-            f"range 1000000-5000000 kHz; keeping {current}"
-        )
-        return current
-    return value
-
-
-def acquire_dispatcher_lock() -> typing.TextIO:
+        return None
     try:
-        return common.acquire_dispatcher_lock(STATE_DIR, 10)
-    except TimeoutError:
-        die("could not acquire dispatcher lock within 10s")
-
-
-def apply_tuned_profile(tuned_profile: str) -> None:
-    if shutil.which("tuned-adm") is None:
-        return
-    current = ""
-    try:
-        current = (
-            Path("/etc/tuned/active_profile")
-            .read_text(encoding="utf-8", errors="ignore")
-            .strip()
-            .replace("\x00", "")
-        )
-    except OSError:
-        current = ""
-    if current == tuned_profile:
-        return
-    try:
-        result = subprocess.run(
-            ["tuned-adm", "profile", tuned_profile],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=10,
-            check=False,
-        )
-        ok = result.returncode == 0
-    except (OSError, subprocess.SubprocessError):
-        ok = False
-    if not ok:
-        warn(
-            f"tuned-adm did not apply '{tuned_profile}'; continuing with direct CPU/SMU policy."
-        )
-
-
-def write_state(
-    profile: str,
-    profile_source: str,
-    epp: str,
-    smu_status: str,
-    stapm: str,
-    fast: str,
-    slow: str,
-    apu: str,
-    tctl: str,
-    boost: str,
-    max_freq: str,
-    vrmmax: str = "stock",
-) -> None:
-    battery_raw = common.battery_capacity(POWER_SUPPLY_DIR)
-    battery_percent = str(battery_raw) if battery_raw is not None else "unknown"
-    threshold = os.environ.get("ELITEBOOK_LOW_BATTERY_THRESHOLD", "20") or "20"
-    updated = datetime.now().astimezone().isoformat(timespec="seconds")
-    STATE_DIR.mkdir(mode=0o755, parents=True, exist_ok=True)
-    tmp = STATE_DIR / f"current.tmp.{os.getpid()}"
-    content = (
-        f"profile={profile}\n"
-        f"source={profile_source}\n"
-        f"epp={epp}\n"
-        f"smu={smu_status}\n"
-        f"stapm_mw={stapm}\n"
-        f"fast_mw={fast}\n"
-        f"slow_mw={slow}\n"
-        f"apu_mw={apu}\n"
-        f"tctl_c={tctl}\n"
-        f"boost={boost}\n"
-        f"max_freq={max_freq}\n"
-        f"vrmmax_ma={vrmmax}\n"
-        f"battery_percent={battery_percent}\n"
-        f"low_battery_threshold_percent={threshold}\n"
-        f"updated={updated}\n"
-    )
-    tmp.write_text(content, encoding="utf-8")
-    try:
-        os.chmod(tmp, 0o644)
+        common.write_atomic(record, f"vrmmax_ma={value}\n")
     except OSError:
         pass
-    os.replace(tmp, STATE_FILE)
+    log.info(f"Firmware VRM peak current limit recorded: {value // 1000} A.")
+    return value
+
+
+def build_engine(
+    log: engine_mod.Log,
+    idle: profiles.IdleSettings,
+    manual: str | None,
+) -> engine_mod.Engine:
+    ryzenadj = find_ryzenadj()
+    hardware = engine_mod.SysfsHardware(
+        cpufreq_dir=CPUFREQ_DIR,
+        pci_devices_dir=PCI_DEVICES_DIR,
+        drm_dir=DRM_DIR,
+        runtime_pm_defaults=STATE_DIR / "runtime-pm-defaults",
+        lockdown_path=LOCKDOWN_PATH,
+        ryzenadj=ryzenadj,
+        stock_vrmmax_ma=stock_vrmmax(ryzenadj, log),
+    )
+    STATE_DIR.mkdir(mode=0o755, parents=True, exist_ok=True)
+    return engine_mod.Engine(
+        hardware,
+        engine_mod.StateFiles(STATE_DIR, log),
+        log,
+        profiles.ProfileConfig.load(PROFILE_CONF),
+        idle,
+        low_battery_threshold(),
+        battery_saver_max_freq(),
+        manual,
+    )
+
+
+# --- control socket --------------------------------------------------------
+
+
+def daemon_reachable() -> bool:
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+            sock.settimeout(1)
+            sock.connect(str(CONTROL_SOCKET))
+            return True
+    except OSError:
+        return False
+
+
+def send_request(request: dict[str, str]) -> dict[str, typing.Any]:
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+            sock.settimeout(30)
+            sock.connect(str(CONTROL_SOCKET))
+            sock.sendall(json.dumps(request).encode() + b"\n")
+            data = b""
+            while not data.endswith(b"\n"):
+                chunk = sock.recv(4096)
+                if not chunk:
+                    break
+                data += chunk
+    except (FileNotFoundError, ConnectionRefusedError):
+        die(SERVICE_DOWN)
+    except OSError as exc:
+        die(f"could not talk to the service: {exc}")
+    try:
+        reply = json.loads(data.decode())
+    except ValueError:
+        die("the service sent an unreadable reply")
+    if not isinstance(reply, dict):
+        die("the service sent an unreadable reply")
+    return typing.cast(dict[str, typing.Any], reply)
+
+
+def peer_uid(conn: socket.socket) -> int:
+    creds = conn.getsockopt(
+        socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i")
+    )
+    return int(struct.unpack("3i", creds)[1])
+
+
+def sd_notify(message: str) -> None:
+    address = os.environ.get("NOTIFY_SOCKET")
+    if not address:
+        return
+    if address.startswith("@"):
+        address = "\0" + address[1:]
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as sock:
+            sock.sendto(message.encode(), address)
+    except OSError:
+        pass
+
+
+class PowerWatch:
+    """AC and battery state, reread when the kernel reports a power change."""
+
+    def __init__(self, log: engine_mod.Log) -> None:
+        self.sock: socket.socket | None = None
+        try:
+            sock = socket.socket(
+                socket.AF_NETLINK, socket.SOCK_DGRAM, NETLINK_KOBJECT_UEVENT
+            )
+            sock.bind((0, 1))
+            sock.setblocking(False)
+            self.sock = sock
+        except OSError as exc:
+            log.warn(
+                f"kernel power events are unavailable ({exc}); reading the power "
+                "supply every tick instead"
+            )
+        self.dirty = True
+        self.next_poll = 0.0
+        self.on_ac = False
+        self.battery: int | None = None
+
+    def drain(self) -> None:
+        if self.sock is None:
+            return
+        while True:
+            try:
+                message = self.sock.recv(65536)
+            except BlockingIOError:
+                return
+            except OSError:
+                # ENOBUFS: events were dropped, so assume one was ours.
+                self.dirty = True
+                return
+            if b"SUBSYSTEM=power_supply" in message.split(b"\0"):
+                self.dirty = True
+
+    def read(self, now: float) -> tuple[bool, int | None]:
+        if self.sock is None or self.dirty or now >= self.next_poll:
+            self.on_ac = common.on_ac_power(POWER_SUPPLY_DIR)
+            self.battery = common.battery_capacity(POWER_SUPPLY_DIR)
+            self.dirty = False
+            self.next_poll = now + POWER_POLL_S
+        return self.on_ac, self.battery
+
+    def close(self) -> None:
+        if self.sock is not None:
+            self.sock.close()
+
+
+class Daemon:
+    def __init__(self) -> None:
+        self.log = engine_mod.Log(PROG)
+        # Before touching any state file: a second daemon must not disturb
+        # the one already running.
+        if daemon_reachable():
+            die("another elitebook-thermal-profile daemon is already running")
+        check_hardware()
+        idle = profiles.IdleSettings.from_env()
+        state_files = engine_mod.StateFiles(STATE_DIR, self.log)
+        # A fresh daemon starts outside any idle overlay; an overlay file left
+        # by a crash or by the old watcher would make the panel show one.
+        state_files.clear_idle()
+        self.engine = build_engine(self.log, idle, state_files.read_override())
+        hardware = self.engine.hardware
+        if isinstance(hardware, engine_mod.SysfsHardware):
+            if hardware.disable_dynamic_epp():
+                self.log.info(
+                    "Turned off amd-pstate dynamic EPP: this service sets EPP itself."
+                )
+        self.games = engine_mod.GameDetector(
+            enabled=truthy(os.environ.get("ELITEBOOK_STEAM_DETECTION", "1")),
+            interval_ac=float(
+                engine_mod.env_int("ELITEBOOK_STEAM_WATCH_INTERVAL_AC", 30)
+            ),
+            interval_battery=float(
+                engine_mod.env_int("ELITEBOOK_STEAM_WATCH_INTERVAL_BATTERY", 120)
+            ),
+            interval_active=float(
+                engine_mod.env_int("ELITEBOOK_STEAM_WATCH_INTERVAL_ACTIVE", 20)
+            ),
+        )
+        self.game: dict[str, str] | None = None
+        self.sampler = engine_mod.CpuSampler()
+        self.power = PowerWatch(self.log)
+        self.temp_input = common.find_temperature_input(HWMON_DIR)
+        self.next_sensor_search = 0.0
+        try:
+            self.tick_s = max(
+                0.2, float(os.environ.get("ELITEBOOK_IDLE_SAMPLE_INTERVAL", "1"))
+            )
+        except ValueError:
+            self.tick_s = 1.0
+        self.config_mtime = config_mtime()
+        self.next_config_check = 0.0
+        self.stopping = False
+        self.listener = self._listen()
+        self.last_boot = time.clock_gettime(time.CLOCK_BOOTTIME)
+        self.last_mono = time.monotonic()
+
+    def _listen(self) -> socket.socket:
+        if daemon_reachable():
+            die("another elitebook-thermal-profile daemon is already running")
+        try:
+            CONTROL_SOCKET.unlink()
+        except FileNotFoundError:
+            pass
+        listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        old_umask = os.umask(0o177)
+        try:
+            listener.bind(str(CONTROL_SOCKET))
+        finally:
+            os.umask(old_umask)
+        listener.listen(4)
+        listener.setblocking(False)
+        return listener
+
+    def temperature(self) -> int | None:
+        value = None
+        if self.temp_input is not None:
+            value = common.read_temperature_c(self.temp_input)
+        now = time.monotonic()
+        if value is None and now >= self.next_sensor_search:
+            # The sensor moved (driver reload) or never existed: look again,
+            # but at most once a minute so a machine without one stays cheap.
+            self.next_sensor_search = now + 60.0
+            self.temp_input = common.find_temperature_input(HWMON_DIR)
+            if self.temp_input is not None:
+                value = common.read_temperature_c(self.temp_input)
+        return value
+
+    def facts(self) -> engine_mod.Facts:
+        now = time.monotonic()
+        on_ac, battery = self.power.read(now)
+        game = self.games.poll(now, on_ac)
+        if (game is None) != (self.game is None):
+            if game is not None:
+                self.log.info(
+                    f"Steam game detected: appid={game['appid']} pid={game['pid']} "
+                    f"comm={game['comm']}"
+                )
+            else:
+                self.log.info("Steam game ended")
+        self.game = game
+        return engine_mod.Facts(
+            now=now,
+            on_ac=on_ac,
+            battery_percent=battery,
+            busy_percent=self.sampler.busy_percent(),
+            load1=engine_mod.load1(),
+            game_running=game is not None,
+            temperature_c=self.temperature(),
+        )
+
+    def check_resume(self) -> None:
+        boot = time.clock_gettime(time.CLOCK_BOOTTIME)
+        mono = time.monotonic()
+        slept = (boot - self.last_boot) - (mono - self.last_mono)
+        self.last_boot, self.last_mono = boot, mono
+        if slept > RESUME_GAP_S:
+            self.log.info(
+                f"Resumed after {slept:.0f}s asleep; reasserting every setting."
+            )
+            self.power.dirty = True
+            self.engine.request_reassert(mono, followup=True)
+
+    def check_config(self, now: float) -> None:
+        if now < self.next_config_check:
+            return
+        self.next_config_check = now + CONFIG_CHECK_S
+        mtime = config_mtime()
+        if mtime != self.config_mtime:
+            self.config_mtime = mtime
+            self.log.info(f"{PROFILE_CONF} changed; reloading it.")
+            self.engine.set_config(profiles.ProfileConfig.load(PROFILE_CONF))
+
+    def refresh(self) -> None:
+        """Reconcile now, reusing the last CPU sample."""
+        last = self.engine.last_facts
+        if last is None:
+            self.engine.step(self.facts())
+            return
+        now = time.monotonic()
+        on_ac, battery = self.power.read(now)
+        self.engine.step(
+            engine_mod.Facts(
+                now=now,
+                on_ac=on_ac,
+                battery_percent=battery,
+                busy_percent=last.busy_percent,
+                load1=last.load1,
+                game_running=last.game_running,
+                temperature_c=last.temperature_c,
+            ),
+            sample_idle=False,
+        )
+
+    def handle(self, request: dict[str, typing.Any]) -> dict[str, typing.Any]:
+        cmd = request.get("cmd")
+        if cmd == "reassert":
+            self.engine.request_reassert(time.monotonic())
+            self.refresh()
+            return {"ok": True, "message": "Every setting was rewritten."}
+        if cmd == "auto":
+            self.engine.set_manual(None)
+        elif cmd == "set" and request.get("profile") in profiles.PROFILE_NAMES:
+            self.engine.set_manual(str(request["profile"]))
+        else:
+            return {"ok": False, "message": f"unknown request {request!r}"}
+        self.refresh()
+        base = self.engine.base
+        if base is None:
+            return {"ok": False, "message": "no profile could be applied"}
+        profile, source = base
+        wanted = request.get("profile")
+        if cmd == "set" and profile.name != wanted:
+            battery = (
+                self.engine.last_facts.battery_percent
+                if self.engine.last_facts
+                else None
+            )
+            return {
+                "ok": False,
+                "message": f"battery is low ({battery}%): battery-saver stays in force "
+                f"and '{wanted}' was not applied.",
+            }
+        message = engine_mod.describe(profile)
+        if cmd == "auto" and source == profiles.SOURCE_GAME:
+            message += " A Steam game is running."
+        return {"ok": True, "message": message}
+
+    def serve_one(self) -> None:
+        try:
+            conn, _ = self.listener.accept()
+        except BlockingIOError:
+            return
+        with conn:
+            conn.settimeout(2)
+            try:
+                if peer_uid(conn) != 0:
+                    reply: dict[str, typing.Any] = {
+                        "ok": False,
+                        "message": "root is required",
+                    }
+                else:
+                    data = b""
+                    while not data.endswith(b"\n") and len(data) < 4096:
+                        chunk = conn.recv(4096)
+                        if not chunk:
+                            break
+                        data += chunk
+                    if not data.strip():
+                        # A liveness probe (daemon_reachable) connects and
+                        # hangs up without asking anything.
+                        return
+                    try:
+                        request = json.loads(data.decode())
+                    except ValueError:
+                        request = {}
+                    if not isinstance(request, dict):
+                        request = {}
+                    reply = self.handle(request)
+                conn.sendall(json.dumps(reply).encode() + b"\n")
+            except (BrokenPipeError, ConnectionResetError):
+                pass  # The client gave up waiting; nothing to report.
+            except OSError as exc:
+                self.log.warn(f"control request failed: {exc}")
+
+    def stop(self, *_: object) -> None:
+        self.stopping = True
+
+    def run(self) -> int:
+        signal.signal(signal.SIGTERM, self.stop)
+        signal.signal(signal.SIGINT, self.stop)
+        self.engine.step(self.facts())
+        sd_notify("READY=1")
+        next_tick = time.monotonic() + self.tick_s
+        try:
+            while not self.stopping:
+                timeout = max(0.0, next_tick - time.monotonic())
+                watched = [self.listener]
+                if self.power.sock is not None:
+                    watched.append(self.power.sock)
+                ready, _, _ = select.select(watched, [], [], timeout)
+                if self.power.sock is not None and self.power.sock in ready:
+                    self.power.drain()
+                if self.listener in ready:
+                    self.serve_one()
+                now = time.monotonic()
+                if now >= next_tick and not self.stopping:
+                    self.check_resume()
+                    self.check_config(now)
+                    self.engine.step(self.facts())
+                    sd_notify("WATCHDOG=1")
+                    next_tick = max(next_tick + self.tick_s, now + self.tick_s / 2)
+        finally:
+            sd_notify("STOPPING=1")
+            self.engine.leave_idle()
+            self.listener.close()
+            self.power.close()
+            try:
+                CONTROL_SOCKET.unlink()
+            except OSError:
+                pass
+        return 0
+
+
+# --- one-shot and client commands -----------------------------------------
+
+
+def apply_once(profile: str | None) -> int:
+    if daemon_reachable():
+        die(
+            "the service is running and owns the power settings; use "
+            f"'{PROG} {profile or 'auto'}' instead of apply-once"
+        )
+    check_hardware()
+    log = engine_mod.Log(PROG)
+    engine = build_engine(log, profiles.IdleSettings(enabled=False), profile)
+    engine.step(
+        engine_mod.Facts(
+            now=time.monotonic(),
+            on_ac=common.on_ac_power(POWER_SUPPLY_DIR),
+            battery_percent=common.battery_capacity(POWER_SUPPLY_DIR),
+            busy_percent=100.0,
+            load1=0.0,
+            game_running=False,
+            temperature_c=common.cpu_temperature_c(HWMON_DIR),
+        )
+    )
+    if profile is not None and engine.base is not None:
+        if engine.base[0].name != profile:
+            print(
+                f"{PROG}: battery is low: battery-saver stays in force and "
+                f"'{profile}' was not applied.",
+                file=sys.stderr,
+            )
+            return 1
+    return 0
 
 
 def reexec_via_sudo(argv: list[str]) -> typing.NoReturn:
     prog = argv[0] if argv else PROG
     if "/" in prog and not os.path.isabs(prog):
         prog = os.path.abspath(prog)
-    # Through `env` rather than bare VAR= assignments so the preserved values
-    # survive sudo's env_reset instead of being filtered before the dispatcher
-    # even starts. Still interactive: no -n, a manual run may prompt.
     cmd = ["sudo", "env"]
     for key in SUDO_PRESERVE_ENV:
-        cmd.append(f"{key}={os.environ.get(key, '')}")
+        if key in os.environ:
+            cmd.append(f"{key}={os.environ[key]}")
     cmd.append(prog)
     cmd.extend(argv[1:])
     try:
         os.execvp("sudo", cmd)
     except OSError:
-        die("sudo is required to apply a profile but was not found; re-run as root")
+        die("sudo is required but was not found; re-run as root")
     raise SystemExit(1)  # pragma: no cover
 
 
 def main(argv: list[str]) -> int:
-    requested = argv[0] if argv else "auto"
-
-    if requested in ("--help", "-h"):
+    command = argv[0] if argv else "auto"
+    if command in ("--help", "-h"):
         usage()
         return 0
-    if requested == "--version":
+    if command == "--version":
         print(f"{PROG} {ELITEBOOK_VERSION}")
         return 0
-    if requested == "status":
+    if command == "status":
         if len(argv) > 1 and argv[1] == "--json":
             print_status_json()
         else:
             print_status()
         return 0
-
-    assert_supported_hardware()
-
-    if requested == "--check-hardware":
-        if truthy(os.environ.get("ELITEBOOK_THERMAL_FORCE", "")):
+    if command == "--check-hardware":
+        described = check_hardware()
+        if described == "forced":
             print("Hardware guard skipped: ELITEBOOK_THERMAL_FORCE is set.")
         else:
-            print(
-                f"Supported hardware detected: {DETECTED_PRODUCT or 'unknown product'} / "
-                f"{DETECTED_CPU or 'unknown CPU'}."
-            )
+            print(f"Supported hardware detected: {described}.")
         return 0
 
+    root_commands = (
+        "daemon",
+        "apply-once",
+        "reassert",
+        "auto",
+        *profiles.PROFILE_NAMES,
+    )
+    if command not in root_commands:
+        usage()
+        return 2
     if os.geteuid() != 0:
         reexec_via_sudo(sys.argv)
 
-    # An explicitly configured RYZENADJ that cannot be executed is fatal;
-    # find_ryzenadj reports that itself.
-    ryzenadj_bin = find_ryzenadj()
-
-    lock_file = acquire_dispatcher_lock()
-    try:
-        profile_source = os.environ.get("ELITEBOOK_PROFILE_SOURCE", "")
-        if not profile_source:
-            profile_source = "auto" if requested == "auto" else "manual"
-
-        current_source = current_value("source")
-        auto_profile = ""
-        if requested == "auto":
-            auto_profile = detect_profile()
-
-        if requested == "auto" and profile_source == "system-auto":
-            if auto_profile != "battery-saver":
-                if current_source == "manual":
-                    print(
-                        "Manual EliteBook thermal profile override is active; system auto left it unchanged."
-                    )
-                    return 0
-                if current_source == "steam-game-watcher":
-                    print(
-                        "Steam game profile is active; system auto left it unchanged."
-                    )
-                    return 0
-
-        if profile_source == "steam-game-watcher" and current_source == "manual":
-            print(
-                "Manual EliteBook thermal profile override is active; Steam watcher left it unchanged."
-            )
-            return 0
-
-        profile = auto_profile if requested == "auto" else requested
-
-        builtin = BUILTIN_PROFILES.get(profile)
-        if builtin is None:
+    if command == "daemon":
+        try:
+            daemon = Daemon()
+        except SystemExit as exc:
+            # Unsupported hardware or a bad RYZENADJ path will not fix itself
+            # on a restart; EX_CONFIG tells systemd to stop retrying.
+            if exc.code == 1:
+                raise SystemExit(EX_CONFIG) from None
+            raise
+        return daemon.run()
+    if command == "apply-once":
+        wanted = argv[1] if len(argv) > 1 else "auto"
+        if wanted != "auto" and wanted not in profiles.PROFILE_NAMES:
             usage()
             return 2
-        (
-            epp,
-            stapm_i,
-            fast_i,
-            slow_i,
-            apu_i,
-            tctl_i,
-            boost,
-            max_freq_default,
-            tuned_profile,
-            vrmmax_default,
-        ) = builtin
-        stapm, fast, slow, apu, tctl = (
-            str(stapm_i),
-            str(fast_i),
-            str(slow_i),
-            str(apu_i),
-            str(tctl_i),
-        )
-        vrmmax = str(vrmmax_default) if vrmmax_default is not None else "stock"
-        if max_freq_default == "BATTERY_SAVER_ENV":
-            max_freq = (
-                os.environ.get("ELITEBOOK_BATTERY_SAVER_MAX_FREQ_KHZ", "1800000")
-                or "1800000"
-            )
-            if not common.is_uint(max_freq):
-                die("ELITEBOOK_BATTERY_SAVER_MAX_FREQ_KHZ must be an integer kHz value")
-        elif max_freq_default is None:
-            max_freq = "uncapped"
-        else:
-            max_freq = max_freq_default
-
-        # Per-profile overrides: AC_SLOW_MW, COOL_TCTL_C, BATTERY_SAVER_EPP...
-        prefix = profile.upper().replace("-", "_")
-        stapm = override_uint(f"{prefix}_STAPM_MW", 4000, 45000, stapm)
-        fast = override_uint(f"{prefix}_FAST_MW", 4000, 45000, fast)
-        slow = override_uint(f"{prefix}_SLOW_MW", 4000, 45000, slow)
-        apu = override_uint(f"{prefix}_APU_MW", 4000, 45000, apu)
-        tctl = override_uint(f"{prefix}_TCTL_C", 60, 100, tctl)
-        epp = override_epp(f"{prefix}_EPP", epp)
-        boost = override_boost(f"{prefix}_BOOST", boost)
-        max_freq = override_max_freq(f"{prefix}_MAX_FREQ_KHZ", max_freq)
-        vrmmax = override_uint(f"{prefix}_VRMMAX_MA", 15000, 120000, vrmmax)
-
-        apply_tuned_profile(tuned_profile)
-        for failure in common.apply_cpu_policy(
-            CPUFREQ_DIR, epp, boost, max_freq, skip_unchanged=True
-        ):
-            warn(failure)
-
-        smu_status = "unavailable"
-        if ryzenadj_bin:
-            vrmmax_arg = vrmmax if vrmmax != "stock" else None
-            ok = common.apply_smu_limits(
-                ryzenadj_bin, stapm, fast, slow, apu, tctl, vrmmax_arg
-            )
-            if ok:
-                smu_status = "ok"
-            else:
-                lockdown = kernel_lockdown_mode()
-                if lockdown != "none" and lockdown != "unavailable":
-                    smu_status = "blocked"
-                    warn(
-                        f"RyzenAdj could not apply SMU limits; kernel lockdown is '{lockdown}', "
-                        "which Secure Boot normally enables. CPU policy (EPP, boost, frequency) "
-                        "was applied. See docs/troubleshooting.md."
-                    )
-                else:
-                    smu_status = "failed"
-                    warn(
-                        "RyzenAdj failed to apply SMU limits. CPU policy (EPP, boost, frequency) was applied."
-                    )
-        else:
-            warn(
-                "RyzenAdj not found; applied CPU policy only (EPP, boost, frequency). "
-                "Install ryzenadj for the SMU power limits, or set RYZENADJ=/path/to/ryzenadj."
-            )
-
-        write_state(
-            profile,
-            profile_source,
-            epp,
-            smu_status,
-            stapm,
-            fast,
-            slow,
-            apu,
-            tctl,
-            boost,
-            max_freq,
-            vrmmax,
-        )
-
-        vrm_summary = f", VRM {int(vrmmax) // 1000}A" if common.is_uint(vrmmax) else ""
-        print(
-            f"EliteBook thermal profile '{profile}' applied: boost {boost}, max freq {max_freq}, "
-            f"EPP {epp}, FAST {fast}mW, SLOW/APU {slow}mW, Tctl {tctl}C{vrm_summary}."
-        )
-        return 0
-    finally:
-        # Closing the lock file releases the flock; no explicit unlock dance.
-        try:
-            lock_file.close()
-        except OSError:
-            pass
+        return apply_once(None if wanted == "auto" else wanted)
+    if command == "reassert":
+        reply = send_request({"cmd": "reassert"})
+    elif command == "auto":
+        reply = send_request({"cmd": "auto"})
+    else:
+        reply = send_request({"cmd": "set", "profile": command})
+    stream = sys.stdout if reply.get("ok") else sys.stderr
+    print(str(reply.get("message", "")), file=stream)
+    return 0 if reply.get("ok") else 1
 
 
 if __name__ == "__main__":
-    raise SystemExit(main(sys.argv[1:]))
+    sys.exit(main(sys.argv[1:]))

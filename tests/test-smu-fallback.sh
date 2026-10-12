@@ -71,6 +71,8 @@ run_dispatcher() {
   env_args=(
     "ELITEBOOK_THERMAL_STATE_DIR=$root/state"
     "ELITEBOOK_CPUFREQ_DIR=$root/cpufreq"
+    "ELITEBOOK_PCI_DEVICES_DIR=$root/pci"
+    "ELITEBOOK_DRM_DIR=$root/drm"
     "ELITEBOOK_DMI_ID_DIR=$root/dmi"
     "ELITEBOOK_CPUINFO_PATH=$root/cpuinfo"
     "ELITEBOOK_POWER_SUPPLY_DIR=$root/power-supply"
@@ -84,13 +86,13 @@ run_dispatcher() {
   [[ -n "$lockdown" ]] && env_args+=("ELITEBOOK_LOCKDOWN_PATH=$lockdown")
 
   if [[ "$EUID" -eq 0 ]]; then
-    env "${env_args[@]}" "$REPO_DIR/src/elitebook-thermal-profile" "$profile" \
+    env "${env_args[@]}" "$REPO_DIR/src/elitebook-thermal-profile" apply-once "$profile" \
       >"$root/out" 2>"$root/err" && echo 0 >"$root/rc" || echo $? >"$root/rc"
   else
     # The redirects are deliberately outside sudo: the transcripts belong to
     # the test user under TMPDIR, not to root.
     # shellcheck disable=SC2024
-    sudo -n env "${env_args[@]}" "$REPO_DIR/src/elitebook-thermal-profile" "$profile" \
+    sudo -n env "${env_args[@]}" "$REPO_DIR/src/elitebook-thermal-profile" apply-once "$profile" \
       >"$root/out" 2>"$root/err" && echo 0 >"$root/rc" || echo $? >"$root/rc"
   fi
 }

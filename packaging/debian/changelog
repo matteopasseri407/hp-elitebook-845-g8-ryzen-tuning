@@ -1,3 +1,37 @@
+elitebook-thermal-profile (1.0.0) unstable; urgency=medium
+
+  * Replace the oneshot dispatcher, the udev rule, the sleep hook, the idle
+    watcher and the Steam watcher with one daemon that is the only writer of
+    power settings. It reconciles to a target and writes only what changed,
+    rewrites everything hourly and after a resume, and rereads profiles.conf
+    on its own. Profile commands reach it over a root-only socket.
+  * Battery level updates no longer reapply the profile every minute, so the
+    thermal record keeps building on battery and the idle overlay is no longer
+    briefly overridden.
+  * Add RUNTIME_PM and PANEL_POWER_SAVINGS profile keys: on battery, idle PCI
+    devices may power down and the panel uses amdgpu power saving.
+  * New commands: reassert, daemon, apply-once. status shows the idle stage.
+  * AC and battery are reread on kernel power events instead of every second.
+  * A profile without a VRM limit restores the firmware value, so the battery
+    profile's 45 A limit no longer stays in force on AC until reboot.
+  * battery-saver holds until the battery climbs 2 points above the
+    threshold, so capacity jitter no longer flips profiles.
+  * Upgrades from earlier packages disable the old watcher units and restart
+    the service, which is now a long-running daemon.
+  * On battery the VRM peak current limit holds every profile, including a
+    manual choice and a Steam game.
+  * The service stops retrying on configuration errors (exit 78) and after
+    10 crashes in 10 minutes.
+  * GNOME indicator: declares GNOME Shell 51 and shows when the service is
+    not running.
+  * The CPU policy is read back every 30 s and rewritten if it drifted; a
+    cpufreq driver stuck at the nominal clock is re-registered (at most
+    hourly). amd-pstate dynamic EPP is turned off where present.
+  * Deep idle no longer toggles boost: its 1.8 GHz cap already keeps boost
+    out.
+
+ -- Matteo Passeri <matteopasseri407@users.noreply.github.com>  Mon, 12 Oct 2026 12:00:00 +0200
+
 elitebook-thermal-profile (0.9.0) unstable; urgency=medium
 
   * Protect against battery brownouts and transient voltage droops under heavy
@@ -24,7 +58,7 @@ elitebook-thermal-profile (0.8.0) unstable; urgency=medium
     root shell, and the system-sleep hook now runs Python too.
   * Name the config file line in refused profile override warnings.
 
-  -- Matteo Passeri <matteopasseri407@users.noreply.github.com>  Tue, 08 Sep 2026 17:23:00 +0200
+ -- Matteo Passeri <matteopasseri407@users.noreply.github.com>  Tue, 08 Sep 2026 17:23:00 +0200
 
 elitebook-thermal-profile (0.7.0) unstable; urgency=medium
 
