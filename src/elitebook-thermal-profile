@@ -40,7 +40,7 @@ import elitebook_common as common  # noqa: E402
 import elitebook_engine as engine_mod  # noqa: E402
 import elitebook_profiles as profiles  # noqa: E402
 
-ELITEBOOK_VERSION = "1.0.0"
+ELITEBOOK_VERSION = "1.1.0"
 PROG = "elitebook-thermal-profile"
 EX_CONFIG = 78
 

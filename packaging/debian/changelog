@@ -1,3 +1,19 @@
+elitebook-thermal-profile (1.1.0) unstable; urgency=medium
+
+  * The GNOME indicator switches profiles over D-Bus through a new front end,
+    elitebook-thermal-profile-dbus, and polkit lets the active local session
+    do it without a password. The front end is started on demand, holds no
+    capabilities and writes no setting: it forwards each authorized request
+    to the daemon's control socket, which stays the only way in. When it is
+    missing or fails, the indicator falls back to pkexec as before.
+  * Ship the D-Bus policy, activation file and polkit action, and stop the
+    front end when the package is removed.
+  * Recommend python3-gi and polkitd; the GNOME indicator depends on
+    python3-gi.
+  * Point Secure Boot users at the new ryzen-smu-dkms package.
+
+ -- Matteo Passeri <matteopasseri407@users.noreply.github.com>  Thu, 15 Oct 2026 12:00:00 +0200
+
 elitebook-thermal-profile (1.0.0) unstable; urgency=medium
 
   * Replace the oneshot dispatcher, the udev rule, the sleep hook, the idle

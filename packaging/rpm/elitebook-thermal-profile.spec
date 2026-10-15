@@ -1,5 +1,5 @@
 Name:           elitebook-thermal-profile
-Version:        1.0.0
+Version:        1.1.0
 Release:        1%{?dist}
 Summary:        Thermal and power profiles for HP AMD Cezanne laptops
 
@@ -202,6 +202,16 @@ fi
 %{_datadir}/gnome-shell/extensions/%{extension_uuid}/
 
 %changelog
+* Thu Oct 15 2026 Matteo Passeri <matteopasseri407@users.noreply.github.com> - 1.1.0-1
+- The GNOME indicator switches profiles over D-Bus through a new front end,
+  elitebook-thermal-profile-dbus, and polkit lets the active local session
+  do it without a password; it falls back to pkexec when the front end is
+  missing or fails
+- The front end is started on demand, holds no capabilities, writes no
+  setting and forwards authorized requests to the daemon's control socket
+- Ship the D-Bus policy, activation file and polkit action; recommend
+  python3-gobject-base and polkit
+
 * Mon Oct 12 2026 Matteo Passeri <matteopasseri407@users.noreply.github.com> - 1.0.0-1
 - Replace the dispatcher, udev rule, sleep hook, idle watcher and Steam
   watcher with one daemon that is the only writer of power settings
