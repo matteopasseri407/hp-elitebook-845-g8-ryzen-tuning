@@ -211,6 +211,8 @@ fi
   setting and forwards authorized requests to the daemon's control socket
 - Ship the D-Bus policy, activation file and polkit action; recommend
   python3-gobject-base and polkit
+- New PCIE_ASPM profile key, off by default; every built-in profile keeps
+  the boot PCIe link power policy
 - New read-only commands: measure reports the battery draw, CPU temperature
   and runtime per profile and idle stage, and warns about a still power
   reading or a disagreeing energy counter; probe lists the power knobs

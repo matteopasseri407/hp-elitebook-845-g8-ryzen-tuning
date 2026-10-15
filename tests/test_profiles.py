@@ -281,3 +281,17 @@ def test_cap_battery_current() -> None:
         profiles.BUILTIN_PROFILES["battery-saver"], profiles.IDLE_NONE, idle
     )
     assert profiles.cap_battery_current(saver, 45000).smu.vrmmax_ma == 30000
+
+
+def test_pcie_aspm_is_opt_in_and_validated(tmp_path: Path) -> None:
+    assert {p.pcie_aspm for p in profiles.BUILTIN_PROFILES.values()} == {"default"}
+    conf = tmp_path / "profiles.conf"
+    conf.write_text(
+        "BATTERY_PCIE_ASPM=PowerSuperSave\nAC_PCIE_ASPM=turbo\n", encoding="utf-8"
+    )
+    config = profiles.ProfileConfig.load(conf)
+    battery, warnings = profiles.resolve_profile("battery", config)
+    assert (battery.pcie_aspm, warnings) == ("powersupersave", [])
+    ac, warnings = profiles.resolve_profile("ac", config)
+    assert ac.pcie_aspm == "default"
+    assert warnings and "is not a PCIe ASPM policy" in warnings[0]

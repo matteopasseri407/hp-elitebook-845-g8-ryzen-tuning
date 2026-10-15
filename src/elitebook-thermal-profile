@@ -66,6 +66,9 @@ HWMON_DIR = _path("ELITEBOOK_HWMON_DIR", "/sys/class/hwmon")
 PCI_DEVICES_DIR = _path("ELITEBOOK_PCI_DEVICES_DIR", "/sys/bus/pci/devices")
 DRM_DIR = _path("ELITEBOOK_DRM_DIR", "/sys/class/drm")
 SYSFS_ROOT = _path("ELITEBOOK_SYSFS_ROOT", "/sys")
+PCIE_ASPM_POLICY = _path(
+    "ELITEBOOK_PCIE_ASPM_POLICY", "/sys/module/pcie_aspm/parameters/policy"
+)
 PROC_CMDLINE = _path("ELITEBOOK_PROC_CMDLINE", "/proc/cmdline")
 
 # A wakeup more than this far ahead of the monotonic clock means the machine
@@ -97,6 +100,7 @@ SUDO_PRESERVE_ENV = (
     "ELITEBOOK_HWMON_DIR",
     "ELITEBOOK_PCI_DEVICES_DIR",
     "ELITEBOOK_DRM_DIR",
+    "ELITEBOOK_PCIE_ASPM_POLICY",
 )
 
 SERVICE_DOWN = (
@@ -257,6 +261,9 @@ def print_status() -> None:
             f"Devices:      {devices.get(runtime_pm, 'unknown')}, "
             f"panel power saving {panel_text}"
         )
+    aspm = state.get("pcie_aspm", "")
+    if aspm:
+        print(f"PCIe links:   ASPM policy {aspm}")
 
     if idle.get("active") == "1":
         print(f"Idle:         {idle.get('stage', 'unknown')} overlay active")
@@ -312,6 +319,7 @@ def print_status_json() -> None:
         "tctl_c": get("tctl_c"),
         "runtime_pm": get("runtime_pm"),
         "panel_power_savings": get("panel_power_savings"),
+        "pcie_aspm": get("pcie_aspm"),
         "idle_stage": idle.get("stage", "none")
         if idle.get("active") == "1"
         else "none",
@@ -751,6 +759,8 @@ def build_engine(
         lockdown_path=LOCKDOWN_PATH,
         ryzenadj=ryzenadj,
         stock_vrmmax_ma=stock_vrmmax(ryzenadj, log),
+        aspm_policy_param=PCIE_ASPM_POLICY,
+        aspm_defaults=STATE_DIR / "pcie-aspm-default",
     )
     STATE_DIR.mkdir(mode=0o755, parents=True, exist_ok=True)
     return engine_mod.Engine(

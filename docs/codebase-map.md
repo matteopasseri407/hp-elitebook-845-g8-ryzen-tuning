@@ -107,7 +107,8 @@ Modulo helper stdlib-only condiviso. Legge sysfs, trova RyzenAdj, scrive policy 
 | `battery_capacity` | function | L104 | `def battery_capacity(power_supply_dir: Path) -> int \| None` |
 | `battery_power_w` | function | | potenza erogata dalla batteria in W, da `power_now` o da `current_now` × `voltage_now` |
 | `battery_energy_wh` | function | | energia in Wh, da `energy_*` o da `charge_*` alla tensione di progetto |
-| `power_inventory` | function | | solo lettura: ogni manopola energetica esposta dal kernel (CPU, platform profile, ASPM, audio, amdgpu, USB, NVMe), per `probe` |
+| `power_inventory` | function | | solo lettura: ogni manopola energetica esposta dal kernel (CPU, platform profile, ASPM e stati L0s/L1/L1.1/L1.2 per collegamento, audio, amdgpu, USB, NVMe), per `probe` |
+| `apply_pcie_aspm` | function | | policy ASPM PCIe: registra quella di avvio prima di cambiarla, `default` la ripristina; senza registrazione `default` non scrive nulla |
 | `cpu_temperature_c` | function | L140 | `def cpu_temperature_c(hwmon_dir: Path) -> int \| None` |
 | `find_ryzenadj` | function | L146 | `def find_ryzenadj(configured: str, search_paths: list[str]) -> str \| None` |
 | `kernel_lockdown_mode` | function | L170 | `def kernel_lockdown_mode(lockdown_path: Path) -> str` |
@@ -313,6 +314,7 @@ Il daemon è l'unico scrittore delle impostazioni, quindi quasi tutti i file di 
 | `override` | daemon | daemon all'avvio | Scelta manuale. Sopravvive al riavvio del daemon, non al reboot. Lo cancellano `auto` e il salvataggio batteria |
 | `control` | daemon (socket, solo root) | CLI, power-guard (tramite CLI), front end D-Bus | Richieste di profilo, `auto`, `reassert` |
 | `runtime-pm-defaults` | daemon | daemon | Valori di runtime PM del kernel salvati prima di cambiarli, per tornare a `default` |
+| `pcie-aspm-default` | daemon | daemon | Policy ASPM di avvio, salvata solo se un profilo ha `PCIE_ASPM` diverso da `default` (opzione sperimentale) |
 | `guard` | `elitebook-power-guard` | monitoring, health check | Stato integrità (`ok`/`degraded`), numero issue, timestamp |
 | `fallback` | `elitebook-power-guard` | debug, recupero | Stato sysfs di emergenza, scritto solo quando il daemon non è in esecuzione |
 | `dispatcher.lock` | `elitebook-power-guard` (solo fallback) | solo il fallback | flock che serializza il fallback sysfs con altri scrittori |

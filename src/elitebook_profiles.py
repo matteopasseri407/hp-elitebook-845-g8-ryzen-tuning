@@ -54,6 +54,8 @@ class Profile:
     firmware's stock VRM current limit alone. ``runtime_pm`` is ``auto``
     (idle PCI devices may power down) or ``default`` (what the kernel chose at
     boot); ``panel_power_savings`` is the amdgpu ABM level, 0 (off) to 4.
+    ``pcie_aspm`` is the kernel's PCIe link power policy; ``default`` keeps
+    the one the machine booted with.
     """
 
     name: str
@@ -69,7 +71,14 @@ class Profile:
     tuned_profile: str
     runtime_pm: str
     panel_power_savings: int
+    pcie_aspm: str = "default"
 
+
+# Every profile keeps the boot ASPM policy. Deeper link states (L1.1, L1.2)
+# save power on idle NVMe and Wi-Fi links, but on some devices they cause
+# dropped links or I/O errors that no quirk list fully covers, so they are
+# an opt-in per profile in profiles.conf, never a default.
+PCIE_ASPM_POLICIES = ("default", "performance", "powersave", "powersupersave")
 
 BATTERY_SAVER_MAX_FREQ_KHZ = 1800000
 
@@ -269,6 +278,20 @@ class _Overrides:
         )
         return current
 
+    def pcie_aspm(self, current: str) -> str:
+        found = self._lookup("PCIE_ASPM")
+        if found is None:
+            return current
+        key, value, lineno = found
+        if value.lower() in PCIE_ASPM_POLICIES:
+            return value.lower()
+        self._warn(
+            lineno,
+            f"{key}='{value}' is not a PCIe ASPM policy (expected "
+            f"{'/'.join(PCIE_ASPM_POLICIES)}); keeping {current}",
+        )
+        return current
+
 
 def resolve_profile(
     name: str,
@@ -299,6 +322,7 @@ def resolve_profile(
         panel_power_savings=o.uint(
             "PANEL_POWER_SAVINGS", 0, 4, base.panel_power_savings
         ),
+        pcie_aspm=o.pcie_aspm(base.pcie_aspm),
     )
     return profile, o.warnings
 
@@ -519,6 +543,7 @@ class Target:
     runtime_pm: str
     panel_power_savings: int
     tuned_profile: str
+    pcie_aspm: str = "default"
 
 
 def lower_cap(a: int | None, b: int | None) -> int | None:
@@ -567,6 +592,7 @@ def target_for(profile: Profile, idle_stage: str, idle: IdleSettings) -> Target:
         profile.runtime_pm,
         profile.panel_power_savings,
         profile.tuned_profile,
+        profile.pcie_aspm,
     )
 
 

@@ -192,6 +192,12 @@ def power_inventory(sysfs: Path, cmdline: Path) -> list[tuple[str, str, str]]:
     def add(group: str, name: str, value: str) -> None:
         rows.append((group, name, value))
 
+    supplies = sysfs / "class" / "power_supply"
+    if _glob(supplies, "*"):
+        add("power", "source", "AC" if on_ac_power(supplies) else "battery")
+    else:
+        add("power", "source", "")
+
     cpu = sysfs / "devices" / "system" / "cpu"
     policy = cpu / "cpufreq" / "policy0"
     add("cpu", "scaling_driver", read_trimmed(policy / "scaling_driver"))
@@ -226,6 +232,11 @@ def power_inventory(sysfs: Path, cmdline: Path) -> list[tuple[str, str, str]]:
         "runtime_pm",
         _count_power_control(_glob(sysfs / "bus" / "pci" / "devices", "*")),
     )
+    for state, (on, offered) in aspm_link_states(
+        sysfs / "bus" / "pci" / "devices"
+    ).items():
+        name = state.replace("_aspm", "").upper().replace("_", ".")
+        add("pcie", f"links_{name}", f"on for {on} of {offered}" if offered else "")
 
     hda = sysfs / "module" / "snd_hda_intel" / "parameters"
     add("audio", "power_save_s", read_trimmed(hda / "power_save"))
@@ -643,6 +654,75 @@ def apply_panel_power_savings(drm_dir: Path, level: str) -> str:
         except OSError:
             status = "failed"
     return status
+
+
+def apply_pcie_aspm(
+    policy_param: Path, policy: str, defaults_file: Path
+) -> tuple[str, str | None]:
+    """Set the kernel's PCIe ASPM policy, or put back the boot one.
+
+    Returns (the policy now in force or ``unsupported``/``failed``, a warning
+    or None). ``default`` restores the value recorded before the first change
+    and writes nothing when there is none, so a machine whose profiles all
+    keep the default never sees a write. The record lives under /run, so a
+    reboot starts again from the boot policy.
+    """
+    if not policy_param.exists():
+        return "unsupported", None
+    current = _choice(policy_param)
+    recorded = read_trimmed(defaults_file)
+    if policy == "default":
+        if not recorded:
+            return current or "unknown", None
+        if current != recorded:
+            try:
+                policy_param.write_text(recorded + "\n", encoding="utf-8")
+            except OSError:
+                return current or "unknown", (
+                    f"failed to restore the boot PCIe ASPM policy {recorded}"
+                )
+        try:
+            defaults_file.unlink()
+        except OSError:
+            pass
+        return _choice(policy_param) or recorded, None
+    if current == policy:
+        return policy, None
+    if not recorded and current:
+        try:
+            write_atomic(defaults_file, current + "\n")
+        except OSError:
+            return current, (
+                f"not changing the PCIe ASPM policy: could not record the boot "
+                f"policy {current} in {defaults_file} to restore it later"
+            )
+    try:
+        policy_param.write_text(policy + "\n", encoding="utf-8")
+    except OSError:
+        return "failed", (
+            f"the kernel refused PCIe ASPM policy {policy}; the firmware may keep "
+            "ASPM control for itself, or pcie_aspm=off is on the command line"
+        )
+    return _choice(policy_param) or policy, None
+
+
+def aspm_link_states(pci_devices_dir: Path) -> dict[str, tuple[int, int]]:
+    """For each ASPM state, (links where it is on, links that offer it).
+
+    The kernel exposes one ``link/<state>`` file per state a link supports,
+    reading 1 when the state is enabled; under the ``default`` policy that is
+    whatever the firmware chose.
+    """
+    counts: dict[str, tuple[int, int]] = {}
+    for state in ("l0s_aspm", "l1_aspm", "l1_1_aspm", "l1_2_aspm"):
+        on = offered = 0
+        for knob in _glob(pci_devices_dir, f"*/link/{state}"):
+            value = read_trimmed(knob)
+            if value in ("0", "1"):
+                offered += 1
+                on += value == "1"
+        counts[state] = (on, offered)
+    return counts
 
 
 def write_atomic(path: Path, content: str, mode: int = 0o644) -> None:

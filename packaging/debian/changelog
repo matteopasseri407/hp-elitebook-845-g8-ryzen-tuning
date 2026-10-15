@@ -11,6 +11,11 @@ elitebook-thermal-profile (1.1.0) unstable; urgency=medium
   * Recommend python3-gi and polkitd; the GNOME indicator depends on
     python3-gi.
   * Point Secure Boot users at the new ryzen-smu-dkms package.
+  * New PCIE_ASPM profile key, off by default: a profile can ask for a PCIe
+    link power policy such as powersupersave, and the boot policy comes back
+    on any profile that keeps the default. Every built-in profile keeps it, so
+    nothing changes unless profiles.conf asks; docs/configuration.md describes
+    how to try it safely.
   * New read-only commands: `measure [SECONDS]` reports what the laptop
     draws from the battery, its CPU temperature and the runtime that draw
     allows, per profile and idle stage, and warns when the firmware's power

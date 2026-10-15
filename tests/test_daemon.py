@@ -87,6 +87,7 @@ class DaemonTests(unittest.TestCase):
             "ELITEBOOK_HWMON_DIR": str(root / "hwmon"),
             "ELITEBOOK_PCI_DEVICES_DIR": str(root / "pci"),
             "ELITEBOOK_DRM_DIR": str(root / "drm"),
+            "ELITEBOOK_PCIE_ASPM_POLICY": str(root / "pcie_aspm_policy"),
             "ELITEBOOK_LOCKDOWN_PATH": str(root / "lockdown"),
             "ELITEBOOK_IDLE_OVERLAY": "0",
             "ELITEBOOK_STEAM_DETECTION": "0",
@@ -246,3 +247,32 @@ class DaemonTests(unittest.TestCase):
         proc = self._cli("cool")
         self.assertEqual(proc.returncode, 1)
         self.assertIn("service is not running", proc.stderr)
+
+    def test_pcie_aspm_is_untouched_unless_opted_in(self) -> None:
+        policy = self.root / "pcie_aspm_policy"
+        policy.write_text("[default] performance powersave powersupersave\n")
+        before = policy.stat().st_mtime_ns
+        ac_online = self.root / "power-supply" / "AC" / "online"
+
+        # Stock configuration: a battery and back trip writes nothing.
+        ac_online.write_text("0\n")
+        self._wait_for(lambda: self._state()["profile"] == "battery", "battery")
+        ac_online.write_text("1\n")
+        self._wait_for(lambda: self._state()["profile"] == "ac", "ac")
+        self.assertEqual(policy.stat().st_mtime_ns, before)
+
+        # Opted in for the battery profile: set on battery, restored on AC.
+        (self.root / "profiles.conf").write_text("BATTERY_PCIE_ASPM=powersupersave\n")
+        ac_online.write_text("0\n")
+        self._wait_for(
+            lambda: policy.read_text().strip() == "powersupersave",
+            "powersupersave on battery",
+        )
+        self._wait_for(
+            lambda: self._state().get("pcie_aspm") == "powersupersave", "state"
+        )
+        ac_online.write_text("1\n")
+        self._wait_for(
+            lambda: policy.read_text().strip() == "default", "boot policy back on AC"
+        )
+        self.assertFalse((self.state / "pcie-aspm-default").exists())

@@ -389,3 +389,86 @@ def test_phase_report_says_too_few_readings(capsys: pytest.CaptureFixture[str]) 
     out = capsys.readouterr().out
     assert "idle soft" in out and "too few readings (1)" in out
     assert "idle deep" in out and "from 14 readings" in out
+
+
+# --- PCIe ASPM: opt in only, and back to the boot policy ---------------------
+
+
+def _aspm_param(
+    tmp_path: Path, content: str = "[default] performance powersave powersupersave"
+) -> Path:
+    param = tmp_path / "policy"
+    param.write_text(content + "\n", encoding="utf-8")
+    return param
+
+
+def test_aspm_default_without_a_record_writes_nothing(tmp_path: Path) -> None:
+    param = _aspm_param(tmp_path)
+    before = param.stat().st_mtime_ns
+    state, warning = common.apply_pcie_aspm(param, "default", tmp_path / "record")
+    assert (state, warning) == ("default", None)
+    assert param.stat().st_mtime_ns == before
+    assert not (tmp_path / "record").exists()
+
+
+def test_aspm_opt_in_records_the_boot_policy_and_restores_it(tmp_path: Path) -> None:
+    param = _aspm_param(tmp_path, "default performance [powersave] powersupersave")
+    record = tmp_path / "record"
+    assert common.apply_pcie_aspm(param, "powersupersave", record) == (
+        "powersupersave",
+        None,
+    )
+    assert param.read_text().strip() == "powersupersave"
+    assert record.read_text().strip() == "powersave"
+    # Asking again changes nothing and keeps the first record.
+    assert common.apply_pcie_aspm(param, "powersupersave", record) == (
+        "powersupersave",
+        None,
+    )
+    assert record.read_text().strip() == "powersave"
+    assert common.apply_pcie_aspm(param, "default", record) == ("powersave", None)
+    assert param.read_text().strip() == "powersave"
+    assert not record.exists()
+
+
+def test_aspm_missing_or_refused_is_reported_not_fatal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    missing = tmp_path / "no-such-policy"
+    assert common.apply_pcie_aspm(missing, "powersupersave", tmp_path / "r") == (
+        "unsupported",
+        None,
+    )
+    param = _aspm_param(tmp_path)
+    real_write = Path.write_text
+
+    def refuse(self: Path, *args: typing.Any, **kwargs: typing.Any) -> int:
+        if self == param:
+            raise PermissionError(1, "Operation not permitted")
+        return real_write(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", refuse)
+    state, warning = common.apply_pcie_aspm(param, "powersupersave", tmp_path / "r")
+    assert state == "failed"
+    assert warning is not None and "refused" in warning
+
+
+def test_probe_reports_link_states_and_power_source(tmp_path: Path) -> None:
+    sysfs = _laptop_sysfs(tmp_path)
+    nvme = sysfs / "bus" / "pci" / "devices" / "0000:01:00.0" / "link"
+    for state, value in (("l1_aspm", "1"), ("l1_1_aspm", "1"), ("l1_2_aspm", "0")):
+        _write(nvme / state, value)
+    wifi = sysfs / "bus" / "pci" / "devices" / "0000:00:00.0" / "link"
+    for state, value in (("l0s_aspm", "0"), ("l1_aspm", "1"), ("l1_2_aspm", "0")):
+        _write(wifi / state, value)
+    _write(sysfs / "class" / "power_supply" / "AC" / "type", "Mains")
+    _write(sysfs / "class" / "power_supply" / "AC" / "online", "0")
+    rows = {
+        (group, name): value
+        for group, name, value in common.power_inventory(sysfs, tmp_path / "none")
+    }
+    assert rows[("power", "source")] == "battery"
+    assert rows[("pcie", "links_L1")] == "on for 2 of 2"
+    assert rows[("pcie", "links_L1.2")] == "on for 0 of 2"
+    assert rows[("pcie", "links_L0S")] == "on for 0 of 1"
+    assert rows[("pcie", "links_L1.1")] == "on for 1 of 1"
