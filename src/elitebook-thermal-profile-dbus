@@ -355,15 +355,19 @@ def main() -> int:
         loop.quit()
         return False
 
-    # GLib.unix_signal_add is deprecated; GLibUnix needs GLib 2.79.2.
+    # GLib.unix_signal_add is deprecated. Its replacement is missing from older
+    # GLib: Ubuntu 24.04 (2.80) has the GLibUnix namespace without signal_add.
+    add_signal = None
     try:
         gi.require_version("GLibUnix", "2.0")
         from gi.repository import (  # type: ignore[import-untyped, import-not-found, unused-ignore, attr-defined]
             GLibUnix,
         )
 
-        add_signal = GLibUnix.signal_add
+        add_signal = getattr(GLibUnix, "signal_add", None)
     except (ImportError, ValueError):
+        pass
+    if add_signal is None:
         add_signal = GLib.unix_signal_add
     add_signal(GLib.PRIORITY_DEFAULT, signal.SIGTERM, stop)
     add_signal(GLib.PRIORITY_DEFAULT, signal.SIGINT, stop)
