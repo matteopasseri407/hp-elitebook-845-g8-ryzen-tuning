@@ -34,12 +34,13 @@ EOF
 install -D -m 0755 src/elitebook-thermal-profile "$tmp/usr/local/sbin/elitebook-thermal-profile"
 install -D -m 0755 src/elitebook-power-guard "$tmp/usr/local/sbin/elitebook-power-guard"
 install -D -m 0755 src/elitebook-hibernate-preflight "$tmp/usr/local/sbin/elitebook-hibernate-preflight"
+install -D -m 0755 src/elitebook-thermal-profile-dbus "$tmp/usr/local/libexec/elitebook-thermal-profile-dbus"
 install -d -m 0755 "$tmp/etc/systemd/system" "$tmp/usr/lib/systemd/system"
 cp systemd/*.service systemd/*.timer "$tmp/etc/systemd/system/"
 cp -a systemd/systemd-hibernate.service.d "$tmp/etc/systemd/system/"
 cp -a systemd/systemd-suspend-then-hibernate.service.d "$tmp/etc/systemd/system/"
 
-for unit in sysinit.target basic.target multi-user.target timers.target tuned.service; do
+for unit in sysinit.target basic.target multi-user.target timers.target tuned.service dbus.socket; do
   copy_host_unit "$unit" || true
 done
 

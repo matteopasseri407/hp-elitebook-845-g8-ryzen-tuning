@@ -1,0 +1,27 @@
+Source: ryzen-smu
+Section: kernel
+Priority: optional
+Maintainer: Matteo Passeri <matteopasseri407@users.noreply.github.com>
+Build-Depends: debhelper-compat (= 13),
+               dh-sequence-dkms
+Standards-Version: 4.7.0
+Homepage: https://github.com/amkillam/ryzen_smu
+Rules-Requires-Root: no
+
+Package: ryzen-smu-dkms
+Architecture: all
+Depends: ${misc:Depends}
+Recommends: ryzenadj (>= 0.17.0)
+Description: ryzen_smu kernel module for AMD Ryzen SMU access (DKMS)
+ The ryzen_smu kernel module exposes the System Management Unit of AMD Ryzen
+ processors through sysfs. RyzenAdj uses it in preference to /dev/mem when a
+ compatible version is loaded.
+ .
+ This matters with Secure Boot on: Secure Boot puts the kernel in lockdown,
+ which blocks the /dev/mem access RyzenAdj otherwise needs, but still loads a
+ module signed with an enrolled key. DKMS builds the module for every installed
+ kernel and signs it. On Ubuntu it uses the machine owner key from
+ shim-signed and asks once, on the next boot, to enroll it; on Debian the key
+ DKMS generates has to be enrolled with mokutil.
+ .
+ The module is loaded at boot through modules-load.d.

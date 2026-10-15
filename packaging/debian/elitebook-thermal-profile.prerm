@@ -1,0 +1,14 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
+set -e
+
+# The D-Bus front end is started on demand, so debhelper, told never to
+# start units, does not stop it either. Stop it on removal so no copy keeps
+# running from deleted files; an upgrade restarts it from the postinst.
+if [ "$1" = "remove" ] && [ -d /run/systemd/system ]; then
+  deb-systemd-invoke stop elitebook-thermal-profile-dbus.service >/dev/null 2>&1 || true
+fi
+
+#DEBHELPER#
+
+exit 0

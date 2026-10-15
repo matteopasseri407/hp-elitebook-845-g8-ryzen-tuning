@@ -28,6 +28,7 @@ flowchart TD
         CLI["elitebook-thermal-profile CLI (client)"]
         POWER_GUARD["elitebook-power-guard (watchdog and health guard)"]
         HIBERNATE["elitebook-hibernate-preflight (swapfile hibernate preflight)"]
+        DBUS["elitebook-thermal-profile-dbus (D-Bus front end, polkit)"]
     end
 
     subgraph STATE["Shared state (/run/elitebook-thermal-profile)"]
@@ -73,7 +74,9 @@ flowchart TD
     HIBERNATE --> COMMON
     SYSTEMD --> DAEMON
     SYSTEMD --> POWER_GUARD
-    GNOME_EXT -->|pkexec| CLI
+    GNOME_EXT -->|D-Bus, polkit| DBUS
+    DBUS -->|requests| CONTROL
+    GNOME_EXT -.->|pkexec, only as fallback| CLI
     GNOME_EXT --> CURRENT
     GNOME_EXT --> IDLE_STATE
 ```
@@ -81,6 +84,8 @@ flowchart TD
 Un solo processo scrive le impostazioni di potenza: `elitebook-thermal-profile daemon`, avviato da `elitebook-thermal-profile.service` (`Type=notify`, con watchdog systemd). Ogni secondo raccoglie i fatti: alimentazione AC o batteria, percentuale batteria, carico CPU, gioco Steam in esecuzione, temperatura. `elitebook_profiles.py` decide il profilo base, con questa precedenza: protezione batteria scarica > scelta manuale > gioco Steam > automatico AC/batteria. Sopra il profilo base applica l'overlay idle. `elitebook_engine.py` confronta i valori target con quelli applicati l'ultima volta e scrive solo la differenza. Ogni impostazione viene riscritta una volta l'ora e subito dopo la ripresa dalla sospensione.
 
 Il CLI non scrive più sysfs. I comandi di profilo (`ac`, `performance`, `battery`, `battery-saver`, `gaming`, `cool`, `auto`) e `reassert` sono richieste inviate al daemon tramite la socket Unix root-only `/run/elitebook-thermal-profile/control`. Il power guard chiede al daemon di riapplicare tutto e scrive sysfs direttamente solo se il daemon non è in esecuzione.
+
+L'estensione GNOME cambia profilo tramite `elitebook-thermal-profile-dbus`, un front end D-Bus sul bus di sistema (`io.github.matteopasseri.EliteBookThermalProfile1`). Lo avvia D-Bus alla prima chiamata, tramite systemd; non parte al boot. Per ogni chiamata chiede a polkit (azione `io.github.matteopasseri.EliteBookThermalProfile1.set-profile`, consentita senza password a chi siede alla sessione attiva) e poi invia alla socket di controllo la stessa richiesta del CLI. Non scrive nessuna impostazione: il daemon resta l'unico scrittore e non sa che il front end esiste. Se il front end manca, non parte o non risponde, l'estensione torna a `pkexec`, quindi un suo guasto toglie solo il percorso senza password.
 
 Perché questa forma: prima un dispatcher a scatto (regola udev su ogni evento AC/batteria, hook di sleep) e due demoni separati (idle watcher e Steam watcher) scrivevano gli stessi parametri, coordinandosi con un file di lock e con timestamp nei file di stato. Un livello di batteria aggiornato ogni minuto poteva riapplicare tutto, azzerare il record termico e sovrascrivere per un attimo l'overlay idle. Un solo proprietario che riconcilia verso un target elimina questa classe di bug.
 
@@ -100,6 +105,10 @@ Modulo helper stdlib-only condiviso. Legge sysfs, trova RyzenAdj, scrive policy 
 | `on_ac_power` | function | L65 | `def on_ac_power(power_supply_dir: Path, *, default_when_unknown: bool = False) -> bool` |
 | `battery_device` | function | L90 | `def battery_device(power_supply_dir: Path) -> Path \| None` |
 | `battery_capacity` | function | L104 | `def battery_capacity(power_supply_dir: Path) -> int \| None` |
+| `battery_power_w` | function | | potenza erogata dalla batteria in W, da `power_now` o da `current_now` × `voltage_now` |
+| `battery_energy_wh` | function | | energia in Wh, da `energy_*` o da `charge_*` alla tensione di progetto |
+| `power_inventory` | function | | solo lettura: ogni manopola energetica esposta dal kernel (CPU, platform profile, ASPM e stati L0s/L1/L1.1/L1.2 per collegamento, audio, amdgpu, USB, NVMe), per `probe` |
+| `apply_pcie_aspm` | function | | policy ASPM PCIe: registra quella di avvio prima di cambiarla, `default` la ripristina; senza registrazione `default` non scrive nulla |
 | `cpu_temperature_c` | function | L140 | `def cpu_temperature_c(hwmon_dir: Path) -> int \| None` |
 | `find_ryzenadj` | function | L146 | `def find_ryzenadj(configured: str, search_paths: list[str]) -> str \| None` |
 | `kernel_lockdown_mode` | function | L170 | `def kernel_lockdown_mode(lockdown_path: Path) -> str` |
@@ -188,6 +197,8 @@ Daemon e CLI in un solo file. `daemon` è il servizio systemd e l'unico processo
 | `print_thermal_record` | function | L157 | `def print_thermal_record(thermal: dict[str, str]) -> None` |
 | `print_status` | function | L178 | `def print_status() -> None`: testo di `status`, con la riga `Idle:` |
 | `print_status_json` | function | L272 | `def print_status_json() -> None`: JSON di `status --json`, con la chiave `idle_stage` |
+| `measure` | function | | `measure [SECONDI]`: campiona il consumo dalla batteria (solo scollegato), temperatura, autonomia stimata; si ferma se si collega l'alimentatore |
+| `print_probe` | function | | `probe`: stampa `common.power_inventory`, testo o `--json` |
 | `detect_cpu_model` | function | L322 | `def detect_cpu_model() -> str` |
 | `check_hardware` | function | L333 | `def check_hardware() -> str`: esce se la macchina non è supportata |
 | `find_ryzenadj` | function | L346 | `def find_ryzenadj() -> str \| None` |
@@ -213,6 +224,23 @@ Daemon e CLI in un solo file. `daemon` è il servizio systemd e l'unico processo
 | `apply_once` | function | L801 | `def apply_once(profile: str \| None) -> int`: un passaggio senza daemon, rifiuta se il daemon è attivo |
 | `reexec_via_sudo` | function | L832 | `def reexec_via_sudo(argv: list[str]) -> typing.NoReturn` |
 | `main` | function | L849 | `def main(argv: list[str]) -> int` |
+
+### [`src/elitebook-thermal-profile-dbus`](src/elitebook-thermal-profile-dbus)
+
+Front end D-Bus, avviato su richiesta da `elitebook-thermal-profile-dbus.service` (`Type=dbus`, senza capability). Usa PyGObject dell'interprete della distribuzione (`/usr/bin/python3`), non la libreria standard. Il nucleo (`daemon_request`, `forward`, `Forwarder`) non importa `gi` ed è testato senza bus.
+
+| Simbolo | Tipo | Linea | Firma |
+|---|---|---|---|
+| `PROFILES` | constant | L57 | profili accettati, allineati a `elitebook_profiles.PROFILE_NAMES` da un test |
+| `Refused` | class | L79 | chiamata rifiutata: `name` (ultima parte del nome di errore D-Bus) e `message` |
+| `daemon_request` | function | L92 | `def daemon_request(profile: str) -> dict[str, str]`: la richiesta che manderebbe il CLI |
+| `forward` | function | L104 | `def forward(request, control_socket, timeout) -> str`: una richiesta alla socket del daemon |
+| `Forwarder` | class | L137 | un solo thread di lavoro: le richieste arrivano al daemon nell'ordine dei clic |
+| `Service` | class | L180 | oggetto esportato: `SetProfile(s) -> s`, controllo polkit, poi `Forwarder` |
+| `Service._authorize` | method | L234 | `CheckAuthorization` asincrono; nessuna risposta da polkit vale come rifiuto |
+| `main` | function | L299 | connessione al bus (o a `ELITEBOOK_DBUS_ADDRESS` nei test), possesso del nome, ciclo GLib |
+
+Errori D-Bus, tutti sotto `io.github.matteopasseri.EliteBookThermalProfile1.Error.`: `InvalidProfile`, `NotAuthorized`, `Refused` (il daemon ha detto no, per esempio batteria scarica), `ServiceDown`, `Failed`.
 
 ### [`src/elitebook-power-guard`](src/elitebook-power-guard)
 
@@ -266,7 +294,13 @@ Interfaccia grafica integrata nel pannello superiore di GNOME Shell (`elitebook-
   - `PROFILE_SCRIPT`: risolto dinamicamente tramite `GLib.file_test` tra `/usr/local/sbin` e `/usr/bin`. È il CLI, che inoltra la richiesta al daemon.
   - `ThermalIndicator`: pulsante pannello con menu a tendina.
   - Monitoraggio real-time: `Gio.File.monitor_directory` su `/run/elitebook-thermal-profile` con debouncing.
-  - Esecuzione non bloccante dei profili (`auto`, `gaming`, `cool`) tramite `Gio.Subprocess` e `pkexec`.
+  - Cambio profilo (`auto`, `gaming`, `cool`) tramite `profileSwitcher.js`.
+- [`profileSwitcher.js`](gnome-extension/elitebook-thermal-profile@matteopasseri.github.io/profileSwitcher.js): usa solo Gio e GLib, così gira anche sotto `gjs` nei test.
+  - `switchProfile(profile, {pkexecArgv, bus})`: chiama `SetProfile` sul front end D-Bus permettendo a polkit di chiedere una password quando serve. Una risposta del front end (errore sotto `...Error.`) è definitiva. Qualsiasi altro errore (servizio assente, versione vecchia, timeout) porta a `pkexec`, come prima del front end.
+
+## 4b. Modulo `ryzen_smu` per Secure Boot (`packaging/debian-ryzen-smu-dkms/`)
+
+Pacchetto `ryzen-smu-dkms`, costruito in CI dal sorgente del fork mantenuto (`amkillam/ryzen_smu`) fissato per commit. Contiene solo il sorgente del modulo: DKMS lo compila e lo firma sulla macchina dell'utente per ogni kernel installato (su Ubuntu con la chiave MOK di `shim-signed`). `modules-load.d` lo carica all'avvio. RyzenAdj 0.17 usa il modulo al posto di `/dev/mem` quando trova una versione compatibile (0.1.x con x ≥ 6), quindi con Secure Boot attivo il daemon scrive i limiti SMU senza modifiche al codice. L'installer da sorgente salta l'avviso di lockdown quando il modulo è caricato (`ryzen_smu_module_ready`).
 
 ## 5. Contratti File di Stato (`/run/elitebook-thermal-profile/`)
 
@@ -278,8 +312,9 @@ Il daemon è l'unico scrittore delle impostazioni, quindi quasi tutti i file di 
 | `idle-watcher` | daemon | GNOME, `status` | Overlay idle (`active=0/1`, `stage=soft/deep`). Esiste solo mentre l'overlay è attivo |
 | `thermal` | daemon | `status`, power-guard | Campioni totali, picco termico, campioni sopra target. Riparte solo quando cambia il profilo base |
 | `override` | daemon | daemon all'avvio | Scelta manuale. Sopravvive al riavvio del daemon, non al reboot. Lo cancellano `auto` e il salvataggio batteria |
-| `control` | daemon (socket, solo root) | CLI, power-guard (tramite CLI) | Richieste di profilo, `auto`, `reassert` |
+| `control` | daemon (socket, solo root) | CLI, power-guard (tramite CLI), front end D-Bus | Richieste di profilo, `auto`, `reassert` |
 | `runtime-pm-defaults` | daemon | daemon | Valori di runtime PM del kernel salvati prima di cambiarli, per tornare a `default` |
+| `pcie-aspm-default` | daemon | daemon | Policy ASPM di avvio, salvata solo se un profilo ha `PCIE_ASPM` diverso da `default` (opzione sperimentale) |
 | `guard` | `elitebook-power-guard` | monitoring, health check | Stato integrità (`ok`/`degraded`), numero issue, timestamp |
 | `fallback` | `elitebook-power-guard` | debug, recupero | Stato sysfs di emergenza, scritto solo quando il daemon non è in esecuzione |
 | `dispatcher.lock` | `elitebook-power-guard` (solo fallback) | solo il fallback | flock che serializza il fallback sysfs con altri scrittori |
@@ -292,8 +327,10 @@ Il daemon è l'unico scrittore delle impostazioni, quindi quasi tutti i file di 
   - `tests/test_common.py`: helper sysfs condivisi, applicazione di policy CPU, SMU, runtime PM e pannello.
   - `tests/test_power_guard.py`: verifica report termico, stati SMU e scrittura atomica guard.
   - `tests/test_hibernate_preflight.py`: verifica validazione file di configurazione btrfs.
+  - `tests/test_measure.py`: `measure` e `probe` contro fixture sysfs e batteria finta (anche alimentatore collegato a metà misura).
+  - `tests/test_dbus_frontend.py`: il front end D-Bus. Le parti pure girano ovunque; i test end-to-end avviano un bus privato, un polkit finto (`tests/fake_polkit.py`), il daemon vero su fixture sysfs e il front end vero, e cambiano profilo con il `profileSwitcher.js` vero sotto `gjs` (`tests/gjs_switch_profile.js`). Servono root, PyGObject, `dbus-daemon` e `gjs`.
 - **Integrazione di sistema (`tests/*.sh`):**
-  - `test-platform-detection.sh`, `test-hardware-guard.sh`, `test-profile-config.sh`, `test-smu-fallback.sh`, `test-thermal-report.sh`, `test-version-consistency.sh`, `verify-systemd-units.sh`, `check-systemd-security.sh`, `check-no-local-paths.sh`.
+  - `test-platform-detection.sh`, `test-hardware-guard.sh`, `test-profile-config.sh`, `test-smu-fallback.sh`, `test-thermal-report.sh`, `test-installer-ryzen-smu.sh`, `test-version-consistency.sh`, `verify-systemd-units.sh`, `check-systemd-security.sh`, `check-no-local-paths.sh`.
 - **Qualità e Tipizzazione:**
   - `mypy --strict --scripts-are-modules`
   - `ruff check src tests`

@@ -250,6 +250,8 @@ class Hardware(typing.Protocol):
 
     def apply_devices(self, runtime_pm: str, panel: int) -> tuple[str, list[str]]: ...
 
+    def apply_aspm(self, policy: str) -> tuple[str, str | None]: ...
+
     def read_cpu(self) -> CpuPolicy | None: ...
 
     def reset_cpufreq_driver(self) -> bool: ...
@@ -298,6 +300,10 @@ class SysfsHardware:
     ryzenadj: str | None
     stock_vrmmax_ma: int | None = None
     tuned_active_profile: Path = Path("/etc/tuned/active_profile")
+    # Unset, ASPM is left alone entirely: tests that build this class
+    # directly must never reach the host's real policy.
+    aspm_policy_param: Path | None = None
+    aspm_defaults: Path | None = None
     # Derived from cpufreq_dir so a test pointing at a fixture tree can never
     # reach the real driver.
     amd_pstate_status: Path | None = None
@@ -453,6 +459,13 @@ class SysfsHardware:
                 "(is amdgpu.abmlevel set on the kernel command line?)"
             )
         return (str(panel) if status == "ok" else status), warnings
+
+    def apply_aspm(self, policy: str) -> tuple[str, str | None]:
+        if self.aspm_policy_param is None or self.aspm_defaults is None:
+            return "unsupported", None
+        return common.apply_pcie_aspm(
+            self.aspm_policy_param, policy, self.aspm_defaults
+        )
 
 
 # --- state files -----------------------------------------------------------
@@ -616,6 +629,7 @@ class Engine:
         self.stage = profiles.IDLE_NONE
         self.smu_status = "unknown"
         self.panel_state = "unknown"
+        self.aspm_state = "unknown"
         self.next_reassert = 0.0
         self.followup: float | None = None
         self.next_smu_retry: float | None = None
@@ -746,6 +760,12 @@ class Engine:
             for warning in warnings:
                 self.log.warn(warning)
 
+        aspm_before = self.aspm_state
+        if everything or prev is None or prev.pcie_aspm != target.pcie_aspm:
+            self.aspm_state, aspm_warning = self.hardware.apply_aspm(target.pcie_aspm)
+            if aspm_warning and self.aspm_state != aspm_before:
+                self.log.warn(aspm_warning)
+
         self.applied = target
         self._check_drift(now)
         if reassert:
@@ -767,6 +787,7 @@ class Engine:
             base_changed
             or self.smu_status != smu_before
             or self.panel_state != panel_before
+            or self.aspm_state != aspm_before
             or vrmmax != self._written_vrmmax
         ):
             self._written_vrmmax = vrmmax
@@ -861,6 +882,7 @@ class Engine:
                 f"vrmmax_ma={vrm}",
                 f"runtime_pm={profile.runtime_pm}",
                 f"panel_power_savings={self.panel_state}",
+                f"pcie_aspm={self.aspm_state}",
                 f"battery_percent={battery}",
                 f"low_battery_threshold_percent={self.low_battery_threshold}",
                 f"updated={updated}",

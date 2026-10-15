@@ -63,6 +63,8 @@ jobs:
         run: tests/test-version-consistency.sh
       - name: Run thermal report tests
         run: tests/test-thermal-report.sh
+      - name: Run installer ryzen_smu tests
+        run: tests/test-installer-ryzen-smu.sh
 
   ruff:
     name: Ruff (Python)
@@ -83,6 +85,7 @@ jobs:
             src/elitebook_engine.py \
             src/elitebook-power-guard \
             src/elitebook-hibernate-preflight \
+            src/elitebook-thermal-profile-dbus \
             tests
       - name: Format check
         run: |
@@ -93,6 +96,7 @@ jobs:
             src/elitebook_engine.py \
             src/elitebook-power-guard \
             src/elitebook-hibernate-preflight \
+            src/elitebook-thermal-profile-dbus \
             tests
 
   python-syntax:
@@ -114,6 +118,7 @@ jobs:
             src/elitebook_engine.py \
             src/elitebook-power-guard \
             src/elitebook-hibernate-preflight \
+            src/elitebook-thermal-profile-dbus \
             tests/test_power_guard.py \
             tests/test_hibernate_preflight.py
       - name: Typecheck Python sources
@@ -124,6 +129,24 @@ jobs:
             src/elitebook_profiles.py \
             src/elitebook_engine.py \
             src/elitebook-power-guard \
-            src/elitebook-hibernate-preflight
+            src/elitebook-hibernate-preflight \
+            src/elitebook-thermal-profile-dbus
       - name: Run unit tests
         run: pytest -q
+
+  dbus-frontend:
+    name: D-Bus front end and GNOME indicator (end to end)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the distribution's PyGObject, D-Bus and gjs
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            dbus-daemon gjs python3-gi python3-pytest
+      - name: Run against a private bus, a real daemon and the real indicator code
+        # Root, because the daemon's control socket answers only root. The
+        # variable turns a skipped test into a failure.
+        run: |
+          sudo env ELITEBOOK_REQUIRE_DBUS_TESTS=1 \
+            /usr/bin/python3 -m pytest -q -rs tests/test_dbus_frontend.py

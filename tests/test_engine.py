@@ -43,6 +43,10 @@ class FakeHardware:
         self.calls.append(("devices", (runtime_pm, panel)))
         return str(panel), []
 
+    def apply_aspm(self, policy: str) -> tuple[str, str | None]:
+        self.calls.append(("aspm", policy))
+        return ("powersave" if policy == "default" else policy), None
+
     # Readback: by default the hardware holds what was last written.
     actual: profiles.CpuPolicy | None = None
     stuck_max: int | None = None
@@ -127,7 +131,7 @@ def state_of(state: Path, name: str = "current") -> dict[str, str]:
 def test_first_step_applies_everything_and_records_it(setup: Setup) -> None:
     eng, hw, log, state = setup
     eng.step(facts(0))
-    assert hw.kinds() == ["tuned", "cpu", "smu", "devices"]
+    assert hw.kinds() == ["tuned", "cpu", "smu", "devices", "aspm"]
     current = state_of(state)
     assert current["profile"] == "battery"
     assert current["source"] == "auto"
@@ -251,7 +255,7 @@ def test_reassert_rewrites_everything_hourly(setup: Setup) -> None:
     eng.step(facts(engine_mod.REASSERT_INTERVAL_S - 1))
     assert hw.kinds() == []
     eng.step(facts(engine_mod.REASSERT_INTERVAL_S))
-    assert hw.kinds() == ["tuned", "cpu", "smu", "devices"]
+    assert hw.kinds() == ["tuned", "cpu", "smu", "devices", "aspm"]
 
 
 def test_resume_reasserts_now_and_once_more_shortly_after(setup: Setup) -> None:
@@ -572,3 +576,29 @@ def test_dynamic_epp_is_turned_off_inside_the_fixture(tmp_path: Path) -> None:
     assert hw.disable_dynamic_epp() is True
     assert knob.read_text(encoding="utf-8").strip() == "disabled"
     assert hw.disable_dynamic_epp() is False
+
+
+def test_aspm_stays_at_the_boot_policy_by_default(setup: Setup) -> None:
+    eng, hw, _, state = setup
+    eng.step(facts(0))
+    eng.step(facts(1, on_ac=True))
+    assert [arg for kind, arg in hw.calls if kind == "aspm"] == ["default"]
+    assert state_of(state)["pcie_aspm"] == "powersave"
+
+
+def test_aspm_opt_in_follows_the_profile(setup: Setup, tmp_path: Path) -> None:
+    eng, hw, _, state = setup
+    conf = tmp_path / "aspm.conf"
+    conf.write_text("BATTERY_PCIE_ASPM=powersupersave\n", encoding="utf-8")
+    eng.set_config(profiles.ProfileConfig.load(conf))
+    eng.step(facts(0))
+    assert state_of(state)["pcie_aspm"] == "powersupersave"
+    hw.kinds()
+    eng.step(facts(1, on_ac=True))
+    assert ("aspm", "default") in hw.calls
+    assert state_of(state)["pcie_aspm"] == "powersave"
+    hw.kinds()
+    # Nothing changed for ASPM between two battery steps: no call at all.
+    eng.step(facts(2))
+    eng.step(facts(3))
+    assert [arg for kind, arg in hw.calls if kind == "aspm"] == ["powersupersave"]

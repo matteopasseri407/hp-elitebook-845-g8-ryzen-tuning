@@ -33,7 +33,7 @@ Keys are `<PROFILE>_<VALUE>`:
 | power | `STAPM_MW`, `FAST_MW`, `SLOW_MW`, `APU_MW` — milliwatts, 4000-45000 |
 | thermal | `TCTL_C` — degrees Celsius, 60-100 |
 | policy | `EPP` — `performance`, `balance_performance`, `balance_power`, `power` |
-| devices | `RUNTIME_PM` — `auto`, `default`; `PANEL_POWER_SAVINGS` — 0-4 |
+| devices | `RUNTIME_PM` — `auto`, `default`; `PANEL_POWER_SAVINGS` — 0-4; `PCIE_ASPM` — `default`, `performance`, `powersave`, `powersupersave` |
 
 Only write down what you want to change. Anything absent keeps its built-in
 value, so an empty file behaves exactly like no file.
@@ -68,6 +68,44 @@ value, so an empty file behaves exactly like no file.
 - **`PANEL_POWER_SAVINGS`** is the amdgpu panel power saving level, 0 (off) to
   4: it lowers the backlight and boosts contrast to compensate, so colors shift
   slightly. Defaults: 1 on `battery`, 3 on `battery-saver`, 0 everywhere else.
+- **`PCIE_ASPM`** is the kernel's PCIe link power policy (ASPM). Every profile
+  defaults to `default`, which keeps the policy the machine booted with and
+  never writes anything. It is an experiment you opt into, not a setting the
+  project recommends: see [Trying deeper PCIe link power states](#trying-deeper-pcie-link-power-states).
+
+## Trying deeper PCIe link power states
+
+`powersupersave` lets idle PCIe links, typically the NVMe drive and the Wi-Fi
+card, enter the L1.1 and L1.2 substates, which can save a few hundred
+milliwatts at idle. It cannot damage hardware, but on some drives and wireless
+cards those substates cause dropped links or I/O errors; the kernel avoids the
+devices known to misbehave, not all of them. That is why it is off unless you
+ask for it, and why it is worth trying only if there is something to gain.
+
+1. **Check whether there is anything to gain.** On battery, run
+   `elitebook-thermal-profile probe` and look at `links_L1.2`. If the firmware
+   already has L1.2 on for every link that offers it, stop here: the policy
+   would change nothing.
+2. **Measure without it**, unplugged and idle, for 20 to 30 minutes:
+   `elitebook-thermal-profile measure 1500`. The battery refreshes its power
+   reading only every couple of minutes, so shorter runs are too rough to see
+   a few hundred milliwatts.
+3. **Turn it on for the battery profile** with one line in
+   `/etc/elitebook-thermal-profile/profiles.conf`:
+   `BATTERY_PCIE_ASPM=powersupersave`. The service picks it up within seconds;
+   `elitebook-thermal-profile status` shows the policy in force, and `probe`
+   shows which links now use L1.2.
+4. **Measure again** under the same conditions. Keep it only if the draw is
+   clearly lower, by more than the spread between two runs of the same setup.
+5. **Use the laptop normally for a few days**, then check the kernel log:
+   `journalctl -k | grep -iE 'aer|pcie bus error|nvme.*(timeout|reset)|iwlwifi|rtw|link'`.
+   Any new PCIe AER error, NVMe timeout or reset, or Wi-Fi dropping out after
+   idle means the substates are not safe on this machine.
+
+To undo it, delete the line. On AC, or with the line removed, the service
+writes back the policy recorded at boot; a reboot also starts from it.
+`apply-once` follows the same rule as the service; the power guard's
+emergency fallback never touches the policy.
 
 ## Bad values are refused, not applied
 
@@ -217,3 +255,39 @@ busy and load levels that count as quiet or busy) and the values each stage
 asks for are in `IdleSettings` in `src/elitebook_profiles.py`. Each one has an
 `ELITEBOOK_`-prefixed variable with the same name. The defaults are the values
 the separate idle watcher used before it was merged into the service.
+
+## Who may switch profiles
+
+The GNOME indicator switches profiles through the D-Bus front end, and polkit
+decides who may: by default the person at the active local session may,
+without a password, and anyone else (SSH, an inactive session) needs an
+administrator. The command line is unaffected; it still needs root.
+
+To change that, add a rule rather than editing the shipped action file, so
+the change survives upgrades. For example, to always ask for an administrator
+password, remembered for a few minutes:
+
+```js
+// /etc/polkit-1/rules.d/50-elitebook-thermal-profile.rules
+polkit.addRule(function(action, subject) {
+    if (action.id == "io.github.matteopasseri.EliteBookThermalProfile1.set-profile") {
+        return polkit.Result.AUTH_ADMIN_KEEP;
+    }
+});
+```
+
+Or to let only members of one group switch without a password:
+
+```js
+// /etc/polkit-1/rules.d/50-elitebook-thermal-profile.rules
+polkit.addRule(function(action, subject) {
+    if (action.id == "io.github.matteopasseri.EliteBookThermalProfile1.set-profile") {
+        return subject.isInGroup("power") && subject.active && subject.local
+            ? polkit.Result.YES
+            : polkit.Result.AUTH_ADMIN;
+    }
+});
+```
+
+polkit picks up rule files without a restart. A refusal shows up in the
+indicator as a notification, not as a fallback to `pkexec`.

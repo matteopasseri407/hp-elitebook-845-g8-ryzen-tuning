@@ -73,6 +73,7 @@ run_dispatcher() {
     "ELITEBOOK_CPUFREQ_DIR=$root/cpufreq"
     "ELITEBOOK_PCI_DEVICES_DIR=$root/pci"
     "ELITEBOOK_DRM_DIR=$root/drm"
+    "ELITEBOOK_PCIE_ASPM_POLICY=$root/pcie_aspm_policy"
     "ELITEBOOK_DMI_ID_DIR=$root/dmi"
     "ELITEBOOK_CPUINFO_PATH=$root/cpuinfo"
     "ELITEBOOK_POWER_SUPPLY_DIR=$root/power-supply"

@@ -106,6 +106,59 @@ While a Steam game is detected (`gaming`), the idle overlay is suppressed entire
 
 On the original tuned system, the Steam watcher sample showed roughly 168 ms of CPU over about 65 seconds and around 6-7 MB resident memory. Treat this as an order-of-magnitude reference, not a guarantee across systems.
 
+## Measure It Yourself
+
+Two read-only commands, no root needed, give the numbers to compare profiles,
+idle stages and settings with:
+
+```bash
+elitebook-thermal-profile measure 300    # 5 minutes, unplugged
+elitebook-thermal-profile probe
+```
+
+`measure` samples what the battery delivers every two seconds, which is the
+whole laptop's draw, so it needs the charger unplugged; it stops early if you
+plug in. It reports the average, minimum and maximum, the CPU temperature, how
+long a full and the current battery would last at that draw, and the profile
+and idle stage in force. `--json` prints the same as one JSON object.
+
+What the first runs on the 845 G8 taught, and how the report handles it:
+
+- **The firmware refreshes the power figure slowly**: about every 150 s on the
+  845 G8, so a 5 minute run holds two real readings (one run read 6.76 W in all
+  31 samples). The report says how often the figure changed, and warns when it
+  stood still for 20 s or half the run: the average then rests on few real
+  readings. To compare settings, run 20 to 30 minutes.
+- **The stored energy counter moves in steps of about 0.1 Wh**, so the fall
+  between start and end is off by up to a step at each end: on the first
+  runs it gave 4.1, 14.4 and 3.6 W against 7.2, 6.6 and 6.8 W read directly.
+  The report times the steps instead, from the first change seen to the
+  last, and shows that figure only as a cross-check: when it lands within
+  25% of the direct reading it says they agree, otherwise it shows how far
+  apart they are. It needs the counter to move at least three times, so it
+  appears only on longer runs. The direct reading is the figure to use.
+- **The idle overlay comes and goes while you measure.** Every sample records
+  the profile and idle stage in force, and when they change the report gives
+  the time spent in each and the average of the fresh readings that arrived
+  during it: a value carried over from before does not count, and a phase
+  with fewer than two fresh readings says "too few readings" instead of a
+  figure. Where the energy counter stepped at least three times within a
+  phase it adds that rate too; the counter steps about every 50 s at 7 W, so
+  it fills in sooner than the power figure. A reading still reflects the
+  firmware's last averaging window, which can reach back into the phase
+  before, so short phases stay rough.
+
+To compare two settings, keep the workload the same: same apps open, same
+screen brightness, Wi-Fi in the same state, and let the machine settle a
+minute before starting. A desktop left alone shows the idle overlay at work;
+run `elitebook-thermal-profile status` to see which stage it reached.
+
+`probe` lists every power knob the kernel exposes on this machine, such as
+CPU driver and EPP, PCIe ASPM policy, audio codec power saving, amdgpu power
+level and panel power saving, USB autosuspend and NVMe power states, with the
+current value or `-` where the knob does not exist. It changes nothing; it
+says what a profile could change here.
+
 ## What Would Make The Data Stronger
 
 Good community test reports should include:
@@ -119,3 +172,4 @@ Good community test reports should include:
 - `sensors` output
 - `ryzenadj -i` output before and after applying a profile
 - whether the machine is plugged in or on battery
+- `elitebook-thermal-profile probe` output, and `measure` runs on battery

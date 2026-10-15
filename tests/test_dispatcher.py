@@ -65,6 +65,7 @@ def _write_fixture(root: Path) -> dict[str, str]:
         "ELITEBOOK_HWMON_DIR": str(root / "hwmon"),
         "ELITEBOOK_PCI_DEVICES_DIR": str(root / "pci"),
         "ELITEBOOK_DRM_DIR": str(root / "drm"),
+        "ELITEBOOK_PCIE_ASPM_POLICY": str(root / "pcie_aspm_policy"),
         "RYZENADJ": str(ryzenadj),
         "PATH": f"{root / 'emptybin'}:/usr/bin:/bin",
     }

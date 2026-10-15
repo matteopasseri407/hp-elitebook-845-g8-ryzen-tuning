@@ -43,8 +43,9 @@ Check lockdown state:
 cat /sys/kernel/security/lockdown
 ```
 
-If lockdown is not `none`, full SMU tuning may be blocked. The EliteBook stack
-will still use sysfs fallback controls where available:
+If lockdown is not `none`, full SMU tuning may be blocked unless the signed
+`ryzen_smu` module is loaded (see [ubuntu.md](ubuntu.md#before-you-start-secure-boot)).
+The EliteBook stack will still use sysfs fallback controls where available:
 
 - AMD P-State EPP
 - CPU boost on/off
@@ -183,7 +184,32 @@ policy so the laptop does not stay in a half-applied power state.
 
 ## GNOME Button Asks For A Password
 
-That is expected. The extension uses `pkexec` to run the profile switcher as root. This repository does not install a passwordless polkit rule by default.
+The indicator switches profiles through a small D-Bus front end,
+`elitebook-thermal-profile-dbus`. polkit lets whoever sits at the active local
+session do that without a password, the same way GNOME's own power mode
+works. When the front end cannot answer, the indicator falls back to `pkexec`,
+which asks for an administrator password every time. A password prompt
+therefore means the front end was not reached. Check, in order:
+
+```bash
+# PyGObject for the distribution's Python (python3-gi on Ubuntu/Debian,
+# python3-gobject-base on Fedora)
+/usr/bin/python3 -c 'import gi'
+
+# The polkit action is installed and allows the active session
+pkaction --action-id io.github.matteopasseri.EliteBookThermalProfile1.set-profile --verbose
+
+# The front end starts and answers (this switches to auto)
+gdbus call --system --dest io.github.matteopasseri.EliteBookThermalProfile1 \
+  --object-path /io/github/matteopasseri/EliteBookThermalProfile1 \
+  --method io.github.matteopasseri.EliteBookThermalProfile1.SetProfile auto
+journalctl -u elitebook-thermal-profile-dbus.service -n 20
+```
+
+If you installed or upgraded from source while logged in, log out and back in
+once so GNOME Shell loads the new indicator code. A prompt from a remote or
+inactive session (SSH, a second user switched away) is expected: polkit only
+waives the password for the active local session.
 
 ## Steam Game Does Not Switch To Gaming
 
@@ -234,8 +260,10 @@ grep smu= /run/elitebook-thermal-profile/current
 - `smu=blocked` — kernel lockdown refused the write, which Secure Boot
   normally enables. Confirm with `cat /sys/kernel/security/lockdown`; anything
   other than `[none]` blocks the `/dev/mem` path RyzenAdj falls back to.
-  Disabling Secure Boot in the firmware restores full control. See
-  [ubuntu.md](ubuntu.md) for the alternatives.
+  Disabling Secure Boot in the firmware restores full control, and so should
+  the signed `ryzen_smu` module from the `ryzen-smu-dkms` package. See
+  [ubuntu.md](ubuntu.md#before-you-start-secure-boot) and
+  [ryzen_smu Installed But SMU Still Blocked](#ryzen_smu-installed-but-smu-still-blocked).
 - `smu=failed` — RyzenAdj ran and returned an error with lockdown off. Run it
   by hand to see why: `sudo ryzenadj -i`.
 
@@ -246,3 +274,25 @@ In the last three cases the `stapm_mw`, `fast_mw`, `slow_mw`, `apu_mw`, and
 `tctl_c` values in the state file record what was requested, not what the
 hardware is enforcing. `sudo elitebook-power-guard check` reports the same
 condition and exits non-zero.
+
+## ryzen_smu Installed But SMU Still Blocked
+
+With `ryzen-smu-dkms` installed, RyzenAdj uses the module only when it is
+loaded and reports version 0.1.6 or later:
+
+```bash
+cat /sys/kernel/ryzen_smu_drv/drv_version
+dkms status ryzen_smu
+journalctl -b | grep -i ryzen_smu
+```
+
+- No `/sys/kernel/ryzen_smu_drv`, and the log says `Key was rejected by
+  service` or `unsigned module loading is restricted`: the module is signed with a key the firmware does not trust yet.
+  Enroll it (`sudo mokutil --import /var/lib/shim-signed/mok/MOK.der` on
+  Ubuntu, `/var/lib/dkms/mok.pub` on Debian) and reboot.
+- `dkms status` does not list the running kernel as `installed`: the headers
+  for it are missing. Install `linux-headers-$(uname -r)`, then
+  `sudo dkms autoinstall`.
+- The module is loaded but `smu=` is still not `ok`: restart the service so it
+  applies the profile again, `sudo systemctl restart elitebook-thermal-profile`,
+  and run `sudo ryzenadj -i`, which prints which access path it chose.

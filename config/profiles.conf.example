@@ -22,6 +22,9 @@
 #                                                  down) or default (kernel's)
 #             PANEL_POWER_SAVINGS                  0 (off) to 4, amdgpu panel
 #                                                  backlight saving
+#             PCIE_ASPM                            default (boot policy),
+#                                                  performance, powersave,
+#                                                  powersupersave
 #
 # Accepted ranges: power 4000-45000 mW, TCTL_C 60-100, VRMMAX_MA 15000-120000 mA,
 # PANEL_POWER_SAVINGS 0-4,
@@ -55,4 +58,11 @@
 # Panel power saving dims the backlight and boosts contrast to compensate, so
 # colors shift slightly. Turn it off on battery for color-critical work:
 #BATTERY_PANEL_POWER_SAVINGS=0
+
+# Experimental, off by default: deeper PCIe link power states on battery.
+# Saves power on idle NVMe and Wi-Fi links where the firmware leaves L1.2 off,
+# but some devices drop links or report I/O errors with it. Read the PCIE_ASPM
+# entry in docs/configuration.md before trying it, and remove the line if the
+# kernel log shows PCIe, NVMe or Wi-Fi errors.
+#BATTERY_PCIE_ASPM=powersupersave
 

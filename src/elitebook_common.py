@@ -32,6 +32,7 @@ from pathlib import Path
 _UINT_RE = re.compile(r"^[0-9]+$")
 _LOCKDOWN_BRACKET_RE = re.compile(r"\[([^\]]+)\]")
 _TEMPERATURE_SENSORS = ("k10temp", "zenpower")
+_ACTIVE_GPU_MODE_RE = re.compile(r"^\s*\d+\s+([A-Z0-9_]+)\s*\*", re.MULTILINE)
 
 
 def read_trimmed(path: Path) -> str:
@@ -110,6 +111,205 @@ def battery_capacity(power_supply_dir: Path) -> int | None:
     if not is_uint(raw):
         return None
     return int(raw)
+
+
+def _micro(supply: Path, name: str) -> int | None:
+    raw = read_trimmed(supply / name)
+    return int(raw) if is_uint(raw) else None
+
+
+def battery_status(supply: Path) -> str:
+    """``Discharging``, ``Charging``, ``Full``, ``Not charging`` or empty."""
+    return read_trimmed(supply / "status")
+
+
+def battery_power_w(supply: Path) -> float | None:
+    """What the battery delivers right now, in watts.
+
+    Firmware reports either ``power_now`` (microwatts) or ``current_now``
+    (microamps) with ``voltage_now`` (microvolts); HP machines differ by
+    model. While charging the value is the charge rate, not the draw.
+    """
+    power = _micro(supply, "power_now")
+    if power is not None:
+        return power / 1e6
+    current = _micro(supply, "current_now")
+    voltage = _micro(supply, "voltage_now")
+    if current is None or voltage is None:
+        return None
+    return current * voltage / 1e12
+
+
+def battery_energy_wh(supply: Path, name: str = "energy_now") -> float | None:
+    """Battery energy in watt-hours: ``energy_now`` by default, or another
+    ``energy_*`` attribute such as ``energy_full``. Firmware that reports
+    ``charge_*`` in microamp-hours instead is converted at the design voltage.
+    """
+    energy = _micro(supply, name)
+    if energy is not None:
+        return energy / 1e6
+    charge = _micro(supply, name.replace("energy", "charge", 1))
+    voltage = _micro(supply, "voltage_min_design") or _micro(supply, "voltage_now")
+    if charge is None or voltage is None:
+        return None
+    return charge * voltage / 1e12
+
+
+def _choice(path: Path) -> str:
+    """The selected entry of a sysfs choice list such as ``a [b] c``."""
+    raw = read_trimmed(path)
+    match = re.search(r"\[([^\]]+)\]", raw)
+    return match.group(1) if match else raw
+
+
+def _count_power_control(devices: list[Path]) -> str:
+    counts: dict[str, int] = {}
+    for device in devices:
+        value = read_trimmed(device / "power" / "control")
+        if value:
+            counts[value] = counts.get(value, 0) + 1
+    if not counts:
+        return ""
+    return ", ".join(f"{count} {value}" for value, count in sorted(counts.items()))
+
+
+def _glob(base: Path, pattern: str) -> list[Path]:
+    try:
+        return sorted(base.glob(pattern))
+    except OSError:
+        return []
+
+
+def power_inventory(sysfs: Path, cmdline: Path) -> list[tuple[str, str, str]]:
+    """Every power knob this machine exposes, as (group, name, value).
+
+    Read only. Empty values mean the knob does not exist here, which is an
+    answer too: it says what a profile could and could not change on this
+    machine. ``sysfs`` is normally /sys and ``cmdline`` /proc/cmdline.
+    """
+    rows: list[tuple[str, str, str]] = []
+
+    def add(group: str, name: str, value: str) -> None:
+        rows.append((group, name, value))
+
+    supplies = sysfs / "class" / "power_supply"
+    if _glob(supplies, "*"):
+        add("power", "source", "AC" if on_ac_power(supplies) else "battery")
+    else:
+        add("power", "source", "")
+
+    cpu = sysfs / "devices" / "system" / "cpu"
+    policy = cpu / "cpufreq" / "policy0"
+    add("cpu", "scaling_driver", read_trimmed(policy / "scaling_driver"))
+    add("cpu", "amd_pstate", read_trimmed(cpu / "amd_pstate" / "status"))
+    add("cpu", "epp", read_trimmed(policy / "energy_performance_preference"))
+    add(
+        "cpu",
+        "epp_choices",
+        read_trimmed(policy / "energy_performance_available_preferences"),
+    )
+    add("cpu", "boost", read_trimmed(cpu / "cpufreq" / "boost"))
+
+    add(
+        "platform",
+        "platform_profile",
+        read_trimmed(sysfs / "firmware" / "acpi" / "platform_profile"),
+    )
+    add(
+        "platform",
+        "platform_profile_choices",
+        read_trimmed(sysfs / "firmware" / "acpi" / "platform_profile_choices"),
+    )
+    add("platform", "mem_sleep", _choice(sysfs / "power" / "mem_sleep"))
+
+    add(
+        "pcie",
+        "aspm_policy",
+        _choice(sysfs / "module" / "pcie_aspm" / "parameters" / "policy"),
+    )
+    add(
+        "pcie",
+        "runtime_pm",
+        _count_power_control(_glob(sysfs / "bus" / "pci" / "devices", "*")),
+    )
+    for state, (on, offered) in aspm_link_states(
+        sysfs / "bus" / "pci" / "devices"
+    ).items():
+        name = state.replace("_aspm", "").upper().replace("_", ".")
+        add("pcie", f"links_{name}", f"on for {on} of {offered}" if offered else "")
+
+    hda = sysfs / "module" / "snd_hda_intel" / "parameters"
+    add("audio", "power_save_s", read_trimmed(hda / "power_save"))
+    add("audio", "power_save_controller", read_trimmed(hda / "power_save_controller"))
+
+    for card in _glob(sysfs / "class" / "drm", "card[0-9]"):
+        device = card / "device"
+        try:
+            driver = os.path.basename(os.readlink(device / "driver"))
+        except OSError:
+            continue
+        if driver != "amdgpu":
+            continue
+        add(
+            "gpu",
+            f"{card.name}_dpm_level",
+            read_trimmed(device / "power_dpm_force_performance_level"),
+        )
+        modes = read_trimmed(device / "pp_power_profile_mode")
+        # One row per mode, the active one marked with "*":
+        # "  1 3D_FULL_SCREEN*:" or "  0 BOOTUP_DEFAULT *: ...".
+        match = _ACTIVE_GPU_MODE_RE.search(modes)
+        add("gpu", f"{card.name}_power_profile", match.group(1) if match else "")
+    for knob in _glob(
+        sysfs / "class" / "drm", "card*-eDP-*/amdgpu/panel_power_savings"
+    ):
+        add("gpu", "panel_power_savings", read_trimmed(knob))
+
+    add(
+        "usb",
+        "autosuspend",
+        _count_power_control(
+            [
+                d
+                for d in _glob(sysfs / "bus" / "usb" / "devices", "*")
+                if ":" not in d.name
+            ]
+        ),
+    )
+
+    add(
+        "storage",
+        "nvme_apst_max_latency_us",
+        read_trimmed(
+            sysfs / "module" / "nvme_core" / "parameters" / "default_ps_max_latency_us"
+        ),
+    )
+    sata = [
+        read_trimmed(host / "link_power_management_policy")
+        for host in _glob(sysfs / "class" / "scsi_host", "host*")
+    ]
+    add("storage", "sata_link_power", ", ".join(sorted({p for p in sata if p})))
+
+    wireless = [
+        net.name
+        for net in _glob(sysfs / "class" / "net", "*")
+        if (net / "wireless").exists()
+    ]
+    add("wireless", "interfaces", ", ".join(wireless))
+
+    try:
+        tokens = cmdline.read_text(encoding="utf-8", errors="ignore").split()
+    except OSError:
+        tokens = []
+    relevant = [
+        t
+        for t in tokens
+        if t.split("=", 1)[0].startswith(
+            ("amd_pstate", "pcie_aspm", "amdgpu", "processor.", "mem_sleep")
+        )
+    ]
+    add("kernel", "cmdline", " ".join(relevant))
+    return rows
 
 
 def find_temperature_input(hwmon_dir: Path) -> Path | None:
@@ -454,6 +654,75 @@ def apply_panel_power_savings(drm_dir: Path, level: str) -> str:
         except OSError:
             status = "failed"
     return status
+
+
+def apply_pcie_aspm(
+    policy_param: Path, policy: str, defaults_file: Path
+) -> tuple[str, str | None]:
+    """Set the kernel's PCIe ASPM policy, or put back the boot one.
+
+    Returns (the policy now in force or ``unsupported``/``failed``, a warning
+    or None). ``default`` restores the value recorded before the first change
+    and writes nothing when there is none, so a machine whose profiles all
+    keep the default never sees a write. The record lives under /run, so a
+    reboot starts again from the boot policy.
+    """
+    if not policy_param.exists():
+        return "unsupported", None
+    current = _choice(policy_param)
+    recorded = read_trimmed(defaults_file)
+    if policy == "default":
+        if not recorded:
+            return current or "unknown", None
+        if current != recorded:
+            try:
+                policy_param.write_text(recorded + "\n", encoding="utf-8")
+            except OSError:
+                return current or "unknown", (
+                    f"failed to restore the boot PCIe ASPM policy {recorded}"
+                )
+        try:
+            defaults_file.unlink()
+        except OSError:
+            pass
+        return _choice(policy_param) or recorded, None
+    if current == policy:
+        return policy, None
+    if not recorded and current:
+        try:
+            write_atomic(defaults_file, current + "\n")
+        except OSError:
+            return current, (
+                f"not changing the PCIe ASPM policy: could not record the boot "
+                f"policy {current} in {defaults_file} to restore it later"
+            )
+    try:
+        policy_param.write_text(policy + "\n", encoding="utf-8")
+    except OSError:
+        return "failed", (
+            f"the kernel refused PCIe ASPM policy {policy}; the firmware may keep "
+            "ASPM control for itself, or pcie_aspm=off is on the command line"
+        )
+    return _choice(policy_param) or policy, None
+
+
+def aspm_link_states(pci_devices_dir: Path) -> dict[str, tuple[int, int]]:
+    """For each ASPM state, (links where it is on, links that offer it).
+
+    The kernel exposes one ``link/<state>`` file per state a link supports,
+    reading 1 when the state is enabled; under the ``default`` policy that is
+    whatever the firmware chose.
+    """
+    counts: dict[str, tuple[int, int]] = {}
+    for state in ("l0s_aspm", "l1_aspm", "l1_1_aspm", "l1_2_aspm"):
+        on = offered = 0
+        for knob in _glob(pci_devices_dir, f"*/link/{state}"):
+            value = read_trimmed(knob)
+            if value in ("0", "1"):
+                offered += 1
+                on += value == "1"
+        counts[state] = (on, offered)
+    return counts
 
 
 def write_atomic(path: Path, content: str, mode: int = 0o644) -> None:

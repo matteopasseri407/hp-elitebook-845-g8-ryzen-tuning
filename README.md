@@ -9,11 +9,11 @@ Linux thermal management and power tuning for HP EliteBook and ProBook laptops p
 
 Stock firmware allows sustained temperatures around 100 °C under normal development loads, relying on thermal throttling. Rather than disabling boost or hard-capping clocks, this stack tunes sustained SMU power limits (via RyzenAdj) and energy preferences (AMD P-State EPP) so bursts remain fast while fans stay quiet.
 
-Pure Python 3 standard library backend (`/usr/local/sbin/elitebook-*`), zero pip dependencies, typed with `mypy --strict`, atomic state updates, and an optional GNOME Shell top panel indicator.
+Pure Python 3 standard library backend (`/usr/local/sbin/elitebook-*`), zero pip dependencies, typed with `mypy --strict`, atomic state updates, and an optional GNOME Shell top panel indicator. The indicator switches profiles over D-Bus with polkit, so the person at the laptop needs no password; one daemon remains the only process that writes power settings.
 
 > [!WARNING]
-> **Secure Boot must be disabled for full SMU control.**
-> Secure Boot activates kernel lockdown, which blocks `/dev/mem` writes. Check with `cat /sys/kernel/security/lockdown` (must read `[none]`). Without this, the stack degrades to sysfs frequency and EPP controls.
+> **Full SMU control needs Secure Boot off, or the signed `ryzen_smu` module.**
+> Secure Boot activates kernel lockdown, which blocks the `/dev/mem` writes RyzenAdj uses by default. Check with `cat /sys/kernel/security/lockdown` (`[none]` means no lockdown). With lockdown on, either install the `ryzen-smu-dkms` package, which DKMS builds and signs ([docs/ubuntu.md](docs/ubuntu.md#before-you-start-secure-boot), not yet tested on hardware), or accept that the stack degrades to sysfs frequency and EPP controls.
 
 ---
 
@@ -84,6 +84,11 @@ elitebook-thermal-profile status
 # JSON status for scripts and status bars
 elitebook-thermal-profile status --json
 
+# Measure what the laptop draws from the battery (unplugged), and list the
+# power knobs this machine exposes; both read only, no root needed
+elitebook-thermal-profile measure 300
+elitebook-thermal-profile probe
+
 # Manually switch profile (auto follows AC/battery/low-battery rules)
 # These ask the running service; no edits to system files are needed.
 sudo elitebook-thermal-profile auto
@@ -103,7 +108,7 @@ Detailed documentation is organized in `docs/`:
 - [CODEBASE_MAP.md](CODEBASE_MAP.md): Full symbol map, architecture diagram, state file contracts, and the control socket.
 - [docs/fedora.md](docs/fedora.md): Fedora RPM packaging, tuned coexistence, and GNOME power mode masking.
 - [docs/ubuntu.md](docs/ubuntu.md): Ubuntu and Debian installation, secure boot configuration, and systemd setup.
-- [docs/configuration.md](docs/configuration.md): Overriding limits via `/etc/elitebook-thermal-profile/profiles.conf`.
+- [docs/configuration.md](docs/configuration.md): Overriding limits via `/etc/elitebook-thermal-profile/profiles.conf`, and polkit rules for who may switch profiles.
 - [docs/troubleshooting.md](docs/troubleshooting.md): Diagnosing RyzenAdj errors, STT firmware overrides, and fallback states.
 - [docs/measurements.md](docs/measurements.md): Thermal benchmarks, fan noise comparisons, and power curves.
 - [docs/hibernate.md](docs/hibernate.md): Opt-in btrfs swapfile hibernate preflight checks.

@@ -40,7 +40,7 @@ import elitebook_common as common  # noqa: E402
 import elitebook_engine as engine_mod  # noqa: E402
 import elitebook_profiles as profiles  # noqa: E402
 
-ELITEBOOK_VERSION = "1.0.0"
+ELITEBOOK_VERSION = "1.1.0"
 PROG = "elitebook-thermal-profile"
 EX_CONFIG = 78
 
@@ -65,6 +65,11 @@ PROFILE_CONF = _path(
 HWMON_DIR = _path("ELITEBOOK_HWMON_DIR", "/sys/class/hwmon")
 PCI_DEVICES_DIR = _path("ELITEBOOK_PCI_DEVICES_DIR", "/sys/bus/pci/devices")
 DRM_DIR = _path("ELITEBOOK_DRM_DIR", "/sys/class/drm")
+SYSFS_ROOT = _path("ELITEBOOK_SYSFS_ROOT", "/sys")
+PCIE_ASPM_POLICY = _path(
+    "ELITEBOOK_PCIE_ASPM_POLICY", "/sys/module/pcie_aspm/parameters/policy"
+)
+PROC_CMDLINE = _path("ELITEBOOK_PROC_CMDLINE", "/proc/cmdline")
 
 # A wakeup more than this far ahead of the monotonic clock means the machine
 # slept in between: CLOCK_BOOTTIME counts suspend, CLOCK_MONOTONIC does not.
@@ -95,6 +100,7 @@ SUDO_PRESERVE_ENV = (
     "ELITEBOOK_HWMON_DIR",
     "ELITEBOOK_PCI_DEVICES_DIR",
     "ELITEBOOK_DRM_DIR",
+    "ELITEBOOK_PCIE_ASPM_POLICY",
 )
 
 SERVICE_DOWN = (
@@ -125,6 +131,10 @@ Profiles (need root; the service applies them):
 Commands:
   status            Show what is applied right now (no root needed)
   status --json     Same as status, as JSON for scripts (no root needed)
+  measure [SECONDS] Measure what the laptop draws from the battery, default
+                    60 s; run it unplugged (no root needed, --json too)
+  probe             List the power knobs this machine exposes and their
+                    current values (no root needed, --json too)
   reassert          Ask the service to rewrite every setting now
   daemon            Run the service (systemd starts this)
   apply-once [P]    Apply profile P (default auto) once, without the service
@@ -251,6 +261,9 @@ def print_status() -> None:
             f"Devices:      {devices.get(runtime_pm, 'unknown')}, "
             f"panel power saving {panel_text}"
         )
+    aspm = state.get("pcie_aspm", "")
+    if aspm:
+        print(f"PCIe links:   ASPM policy {aspm}")
 
     if idle.get("active") == "1":
         print(f"Idle:         {idle.get('stage', 'unknown')} overlay active")
@@ -306,6 +319,7 @@ def print_status_json() -> None:
         "tctl_c": get("tctl_c"),
         "runtime_pm": get("runtime_pm"),
         "panel_power_savings": get("panel_power_savings"),
+        "pcie_aspm": get("pcie_aspm"),
         "idle_stage": idle.get("stage", "none")
         if idle.get("active") == "1"
         else "none",
@@ -321,6 +335,328 @@ def print_status_json() -> None:
         "updated": get("updated"),
     }
     print(json.dumps(payload, sort_keys=True))
+
+
+# --- measuring --------------------------------------------------------------
+
+
+def _measure_interval() -> float:
+    try:
+        return max(0.01, float(os.environ.get("ELITEBOOK_MEASURE_INTERVAL", "2")))
+    except ValueError:
+        return 2.0
+
+
+def _idle_stage() -> str:
+    idle = read_state(IDLE_FILE)
+    return idle.get("stage", "none") if idle.get("active") == "1" else "none"
+
+
+def _stats(values: list[float]) -> dict[str, float] | None:
+    if not values:
+        return None
+    return {
+        "avg": round(sum(values) / len(values), 2),
+        "min": round(min(values), 2),
+        "max": round(max(values), 2),
+    }
+
+
+class Sample(typing.NamedTuple):
+    t: float  # seconds since the measurement began
+    power_w: float | None
+    energy_wh: float | None
+    temp_c: float | None
+    phase: str  # profile, source and idle stage in force at the time
+
+
+# A power reading that sits still for this long, or this share of the run,
+# is a firmware that refreshes slowly, not a laptop drawing a flat line.
+STALE_MIN_S = 20.0
+STALE_SHARE = 0.5
+# The energy counter cross-check agrees when it lands this close to the
+# direct reading.
+AGREE_SHARE = 0.25
+# A phase needs this many fresh power readings for an average of its own.
+MIN_PHASE_READINGS = 2
+
+
+def _phase() -> str:
+    state = read_state(STATE_FILE)
+    return (
+        f"{state.get('profile', 'unknown')} ({state.get('source', 'unknown')}), "
+        f"idle {_idle_stage()}"
+    )
+
+
+def _power_updates(samples: list[Sample], elapsed: float) -> tuple[int, float]:
+    """(how often the power reading changed, its longest still stretch in s)."""
+    readings = [(s.t, s.power_w) for s in samples if s.power_w is not None]
+    if not readings:
+        return 0, 0.0
+    changes = 0
+    run_start = readings[0][0]
+    longest = 0.0
+    for (_, previous), (t, value) in zip(readings, readings[1:]):
+        if value != previous:
+            changes += 1
+            longest = max(longest, t - run_start)
+            run_start = t
+    longest = max(longest, elapsed - run_start)
+    return changes, round(longest, 1)
+
+
+class Change(typing.NamedTuple):
+    t: float
+    value: float
+    phase: str
+
+
+def _changes(samples: list[Sample], field: str) -> list[Change]:
+    """The samples where ``field`` took a new value: fresh firmware readings.
+
+    The first sample is not one: its value may be minutes old.
+    """
+    seen = [s for s in samples if getattr(s, field) is not None]
+    return [
+        Change(s.t, getattr(s, field), s.phase)
+        for previous, s in zip(seen, seen[1:])
+        if getattr(s, field) != getattr(previous, field)
+    ]
+
+
+def _energy_rate(edges: list[Change]) -> dict[str, typing.Any]:
+    """The draw implied by the battery's stored energy counter.
+
+    The counter moves in steps (about 0.1 Wh on the HP tested), so the fall
+    between the first and last sample is off by up to a step at each end:
+    on a short run that is most of the reading. Timing the steps themselves,
+    from the first change seen to the last, removes that error and leaves
+    only the sampling interval at each end.
+    """
+    result: dict[str, typing.Any] = {"steps": len(edges), "rate_w": None}
+    if len(edges) < 2:
+        return result
+    first, last = edges[0], edges[-1]
+    if last.t <= first.t or last.value >= first.value:
+        return result
+    steps = sorted(abs(b.value - a.value) for a, b in zip(edges, edges[1:]))
+    result.update(
+        rate_w=round((first.value - last.value) * 3600 / (last.t - first.t), 2),
+        window_s=round(last.t - first.t, 1),
+        step_wh=round(steps[len(steps) // 2], 3),
+    )
+    return result
+
+
+def summarize(samples: list[Sample], elapsed: float) -> dict[str, typing.Any]:
+    """Figures for a finished run; pure, so the tests can feed it samples."""
+    power = [s.power_w for s in samples if s.power_w is not None]
+    stats = _stats(power)
+    changes, still = _power_updates(samples, elapsed)
+    stale = len(power) >= 5 and (
+        changes == 0 or still >= max(STALE_MIN_S, STALE_SHARE * elapsed)
+    )
+    energy_edges = _changes(samples, "energy_wh")
+    readings = _changes(samples, "power_w")
+    energy = _energy_rate(energy_edges)
+    if energy["rate_w"] is not None and stats and stats["avg"] > 0:
+        gap = abs(energy["rate_w"] - stats["avg"]) / stats["avg"]
+        energy["differs_by"] = round(gap, 2)
+        energy["agrees"] = gap <= AGREE_SHARE
+    else:
+        energy["agrees"] = None
+
+    # Within a phase only fresh readings count: a value carried over from
+    # the phase before, or one the firmware has not refreshed, says nothing
+    # about this one. Fewer than MIN_PHASE_READINGS give no figure at all.
+    seconds: dict[str, float] = {}
+    for index, sample in enumerate(samples):
+        following = samples[index + 1].t if index + 1 < len(samples) else elapsed
+        seconds[sample.phase] = seconds.get(sample.phase, 0.0) + max(
+            0.0, following - sample.t
+        )
+    by_phase = []
+    for name in sorted(seconds, key=lambda n: -seconds[n]):
+        fresh = [r.value for r in readings if r.phase == name]
+        enough = len(fresh) >= MIN_PHASE_READINGS
+        by_phase.append(
+            {
+                "phase": name,
+                "seconds": round(seconds[name], 1),
+                "readings": len(fresh),
+                "power_w": round(sum(fresh) / len(fresh), 2) if enough else None,
+                "energy_w": _energy_rate([e for e in energy_edges if e.phase == name])[
+                    "rate_w"
+                ],
+            }
+        )
+    return {
+        "seconds": round(elapsed, 1),
+        "samples": len(power),
+        "power_w": stats,
+        "power_updates": changes,
+        "power_still_s": still,
+        "power_reading_stale": stale,
+        "energy_counter": energy,
+        "phases": by_phase,
+        "changed_during": len(by_phase) > 1,
+        "cpu_temp_c": _stats([s.temp_c for s in samples if s.temp_c is not None]),
+    }
+
+
+def measure(seconds: int) -> dict[str, typing.Any]:
+    """Sample the battery draw for ``seconds``; dies when plugged in.
+
+    The battery is the only meter a laptop has, and only while it
+    discharges: on AC it reports the charge rate. The direct power reading
+    is the figure; the stored energy counter is only a cross-check, because
+    it moves in coarse steps.
+    """
+    supply = common.battery_device(POWER_SUPPLY_DIR)
+    if supply is None:
+        die("no battery found under " + str(POWER_SUPPLY_DIR))
+    if on_ac_power() or common.battery_status(supply) == "Charging":
+        die(
+            "unplug the charger first: on AC the battery reports its charge "
+            "rate, not what the laptop draws"
+        )
+    interval = _measure_interval()
+    began = time.monotonic()
+    deadline = began + seconds
+    samples: list[Sample] = []
+    ended = "complete"
+    try:
+        while True:
+            temp = common.cpu_temperature_c(HWMON_DIR)
+            samples.append(
+                Sample(
+                    t=time.monotonic() - began,
+                    power_w=common.battery_power_w(supply),
+                    energy_wh=common.battery_energy_wh(supply),
+                    temp_c=None if temp is None else float(temp),
+                    phase=_phase(),
+                )
+            )
+            if on_ac_power():
+                ended = "plugged in"
+                break
+            now = time.monotonic()
+            if now >= deadline:
+                break
+            time.sleep(min(interval, deadline - now))
+    except KeyboardInterrupt:
+        ended = "interrupted"
+    result = summarize(samples, time.monotonic() - began)
+    stats = result["power_w"]
+    runtime: dict[str, float | None] = {"full_h": None, "remaining_h": None}
+    if stats and stats["avg"] > 0:
+        full = common.battery_energy_wh(supply, "energy_full")
+        if full is not None:
+            runtime["full_h"] = round(full / stats["avg"], 1)
+        left = common.battery_energy_wh(supply)
+        if left is not None:
+            runtime["remaining_h"] = round(left / stats["avg"], 1)
+    state = read_state(STATE_FILE)
+    result.update(
+        ended=ended,
+        battery_percent=common.battery_capacity(POWER_SUPPLY_DIR),
+        runtime=runtime,
+        profile=state.get("profile", "unknown"),
+        source=state.get("source", "unknown"),
+        idle_stage=_idle_stage(),
+    )
+    return result
+
+
+def print_measurement(result: dict[str, typing.Any]) -> None:
+    power = result["power_w"]
+    if power is None:
+        die("the battery reported no power or current reading")
+    print(
+        f"Measured {result['seconds']:.0f} s on battery ({result['samples']} samples)."
+    )
+    if result["ended"] != "complete":
+        print(f"Stopped early: {result['ended']}.")
+    print(
+        f"  Draw:         avg {power['avg']:.1f} W, "
+        f"min {power['min']:.1f} W, max {power['max']:.1f} W"
+    )
+    updates = result["power_updates"]
+    if updates:
+        every = result["seconds"] / updates
+        spacing = f"{every:.0f}" if every >= 10 else f"{every:.1f}"
+        print(
+            f"  Reading:      the battery updated its power figure {updates} times "
+            f"(about every {spacing} s)"
+        )
+    else:
+        print("  Reading:      the battery never updated its power figure")
+    energy = result["energy_counter"]
+    if energy["rate_w"] is None:
+        print(
+            "  Cross-check:  none; the energy counter moved fewer than three "
+            "times (measure longer)"
+        )
+    elif energy["agrees"]:
+        print(
+            f"  Cross-check:  energy counter {energy['rate_w']:.1f} W over "
+            f"{energy['window_s']:.0f} s, agrees within {AGREE_SHARE:.0%}"
+        )
+    else:
+        print(
+            f"  Cross-check:  energy counter {energy['rate_w']:.1f} W over "
+            f"{energy['window_s']:.0f} s, {energy['differs_by']:.0%} away from the "
+            "direct reading; trust neither to better than that"
+        )
+    if result["changed_during"]:
+        print(
+            "  By phase (the profile or idle stage changed while measuring; only "
+            "fresh readings count):"
+        )
+        for phase in result["phases"]:
+            count = phase["readings"]
+            if phase["power_w"] is None:
+                watts = f"too few readings ({count})"
+            else:
+                watts = f"{phase['power_w']:.1f} W from {count} readings"
+            if phase["energy_w"] is not None:
+                watts += f", energy counter {phase['energy_w']:.1f} W"
+            print(f"    {phase['phase']:<36} {phase['seconds']:>5.0f} s  {watts}")
+    else:
+        print(f"  Phase:        {result['phases'][0]['phase']}")
+    temp = result["cpu_temp_c"]
+    if temp is not None:
+        print(f"  CPU temp:     avg {temp['avg']:.0f} °C, max {temp['max']:.0f} °C")
+    runtime = result["runtime"]
+    if runtime["full_h"] is not None:
+        line = f"  At this draw: a full battery lasts about {runtime['full_h']:.1f} h"
+        if runtime["remaining_h"] is not None:
+            line += f", what is left about {runtime['remaining_h']:.1f} h"
+        print(line + ".")
+    if result["power_reading_stale"]:
+        print(
+            f"Warning: the power reading stood still for {result['power_still_s']:.0f} s "
+            "of the run. The firmware refreshes it slowly, so the average rests on "
+            "few real readings; measure for longer."
+        )
+
+
+def print_probe(as_json: bool) -> None:
+    rows = common.power_inventory(SYSFS_ROOT, PROC_CMDLINE)
+    if as_json:
+        payload: dict[str, dict[str, str | None]] = {}
+        for group, name, value in rows:
+            payload.setdefault(group, {})[name] = value or None
+        print(json.dumps(payload, sort_keys=True))
+        return
+    print("Power knobs on this machine (read only; - means not present)")
+    current = ""
+    for group, name, value in rows:
+        if group != current:
+            print(f"\n{group}")
+            current = group
+        print(f"  {name:<26} {value or '-'}")
 
 
 # --- hardware and settings -------------------------------------------------
@@ -423,6 +759,8 @@ def build_engine(
         lockdown_path=LOCKDOWN_PATH,
         ryzenadj=ryzenadj,
         stock_vrmmax_ma=stock_vrmmax(ryzenadj, log),
+        aspm_policy_param=PCIE_ASPM_POLICY,
+        aspm_defaults=STATE_DIR / "pcie-aspm-default",
     )
     STATE_DIR.mkdir(mode=0o755, parents=True, exist_ok=True)
     return engine_mod.Engine(
@@ -866,6 +1204,26 @@ def main(argv: list[str]) -> int:
             print_status_json()
         else:
             print_status()
+        return 0
+    if command == "measure":
+        args = argv[1:]
+        as_json = "--json" in args
+        numbers = [a for a in args if a != "--json"]
+        if len(numbers) > 1 or (numbers and not numbers[0].isdigit()):
+            usage()
+            return 2
+        seconds = int(numbers[0]) if numbers else 60
+        if seconds < 1:
+            usage()
+            return 2
+        result = measure(seconds)
+        if as_json:
+            print(json.dumps(result, sort_keys=True))
+        else:
+            print_measurement(result)
+        return 0
+    if command == "probe":
+        print_probe(len(argv) > 1 and argv[1] == "--json")
         return 0
     if command == "--check-hardware":
         described = check_hardware()

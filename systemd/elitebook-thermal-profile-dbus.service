@@ -1,0 +1,45 @@
+[Unit]
+Description=D-Bus front end for the EliteBook thermal profile daemon
+Documentation=https://github.com/matteopasseri407/hp-elitebook-845-g8-ryzen-tuning
+# Started on demand by D-Bus activation, never at boot: the unit has no
+# [Install] section. It forwards profile requests that polkit authorized to
+# the daemon's control socket and writes no setting itself.
+
+[Service]
+Type=dbus
+BusName=io.github.matteopasseri.EliteBookThermalProfile1
+ExecStart=/usr/local/libexec/elitebook-thermal-profile-dbus
+# Root only so it can reach the daemon's root-only control socket, which it
+# owns; it needs no capability for that, so it keeps none.
+CapabilityBoundingSet=
+AmbientCapabilities=
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateNetwork=yes
+RestrictAddressFamilies=AF_UNIX
+IPAddressDeny=any
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+# A call outside the filter fails with EPERM instead of killing the service.
+SystemCallErrorNumber=EPERM
+ProtectClock=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+ProtectProc=invisible
+ProcSubset=pid
+KeyringMode=private
+UMask=0077
+RemoveIPC=yes
+MemoryMax=64M
