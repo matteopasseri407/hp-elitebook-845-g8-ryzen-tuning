@@ -6,13 +6,18 @@ Both run against fixture sysfs trees, so no battery and no root are needed.
 
 from __future__ import annotations
 
+import importlib.machinery
+import importlib.util
 import json
+import math
 import os
 import subprocess
 import sys
 import threading
 import time
 from pathlib import Path
+
+import typing
 
 import pytest
 
@@ -22,6 +27,18 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 import elitebook_common as common  # noqa: E402
 
 CLI = REPO_ROOT / "src" / "elitebook-thermal-profile"
+
+
+def _load_cli() -> typing.Any:
+    loader = importlib.machinery.SourceFileLoader("elitebook_cli", str(CLI))
+    spec = importlib.util.spec_from_loader("elitebook_cli", loader)
+    assert spec is not None
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+
+cli = _load_cli()
 
 # What amdgpu prints on Renoir and Cezanne APUs.
 PP_POWER_PROFILE_MODE = """  0 BOOTUP_DEFAULT :
@@ -190,8 +207,10 @@ def test_measure_reports_draw_and_runtime(tmp_path: Path) -> None:
     assert result["runtime"] == {"full_h": 8.5, "remaining_h": 5.5}
     assert (result["profile"], result["source"]) == ("battery", "auto")
     assert result["changed_during"] is False
-    # Too short a window for the energy counter to mean anything.
-    assert result["power_from_energy_w"] is None
+    assert result["phases"][0]["phase"] == "battery (auto), idle none"
+    # A fixture that never changes is exactly what a stuck reading looks like.
+    assert result["power_updates"] == 0
+    assert result["energy_counter"]["rate_w"] is None
 
     proc = _run(tmp_path, supplies, "measure", "1")
     assert proc.returncode == 0, proc.stderr
@@ -240,3 +259,112 @@ def test_probe_prints_text_and_json(tmp_path: Path) -> None:
     payload = json.loads(proc.stdout)
     assert payload["gpu"]["card1_power_profile"] == "3D_FULL_SCREEN"
     assert payload["platform"]["platform_profile"] is None
+
+
+# --- summarize: the figures, from samples shaped like the real laptop's ---
+
+
+def _samples(
+    seconds: float,
+    power: typing.Callable[[float], float | None],
+    energy: typing.Callable[[float], float | None],
+    phase: typing.Callable[[float], str] = lambda t: "battery (auto), idle deep",
+    every: float = 2.0,
+) -> list[typing.Any]:
+    count = int(seconds / every) + 1
+    return [
+        cli.Sample(
+            t=i * every,
+            power_w=power(i * every),
+            energy_wh=energy(i * every),
+            temp_c=50.0,
+            phase=phase(i * every),
+        )
+        for i in range(count)
+    ]
+
+
+def _stepped(
+    start_wh: float, watts: float, step_wh: float = 0.1
+) -> typing.Callable[[float], float]:
+    """A counter that only moves in whole steps, like the HP battery's."""
+    return lambda t: math.ceil((start_wh - watts * t / 3600) / step_wh - 1e-9) * step_wh
+
+
+def test_a_reading_that_never_moves_is_reported_stale() -> None:
+    # 31 samples all at 6.76 W: what the laptop showed in one 60 s run.
+    result = cli.summarize(_samples(60, lambda t: 6.76, lambda t: 30.0), 60.0)
+    assert result["power_updates"] == 0
+    assert result["power_reading_stale"] is True
+    assert result["power_w"]["avg"] == 6.76
+
+
+def test_a_reading_that_moves_is_not_stale() -> None:
+    def power(t: float) -> float:
+        return 6.6 + 0.2 * (int(t // 10) % 3)
+
+    result = cli.summarize(_samples(300, power, _stepped(40.0, 6.8)), 300.0)
+    assert result["power_updates"] >= 20
+    assert result["power_reading_stale"] is False
+
+
+def test_long_still_stretch_counts_as_stale() -> None:
+    def power(t: float) -> float:
+        return 7.0 if t < 200 else 6.5
+
+    result = cli.summarize(_samples(300, power, _stepped(40.0, 6.8)), 300.0)
+    assert result["power_updates"] == 1
+    assert result["power_still_s"] == 200.0
+    assert result["power_reading_stale"] is True
+
+
+def test_energy_steps_give_the_right_rate_where_start_minus_end_does_not() -> None:
+    watts = 6.8
+    counter = _stepped(40.03, watts)
+    samples = _samples(300, lambda t: watts, counter)
+    # The naive figure: fall between first and last sample over the run.
+    naive = (samples[0].energy_wh - samples[-1].energy_wh) * 3600 / 300
+    result = cli.summarize(samples, 300.0)
+    energy = result["energy_counter"]
+    assert energy["steps"] >= 3
+    assert energy["step_wh"] == pytest.approx(0.1)
+    assert energy["rate_w"] == pytest.approx(watts, rel=0.1)
+    assert energy["agrees"] is True
+    # The coarse counter throws the naive figure well off on the same data.
+    assert abs(naive - watts) > abs(energy["rate_w"] - watts)
+
+
+def test_a_counter_that_disagrees_is_flagged_not_hidden() -> None:
+    # The 300 s run: direct reading 6.8 W, energy counter implying 3.6 W.
+    result = cli.summarize(_samples(300, lambda t: 6.8, _stepped(40.0, 3.6)), 300.0)
+    energy = result["energy_counter"]
+    assert energy["agrees"] is False
+    assert energy["differs_by"] == pytest.approx(0.47, abs=0.06)
+
+
+def test_too_few_counter_steps_give_no_cross_check() -> None:
+    result = cli.summarize(_samples(60, lambda t: 7.0, _stepped(40.0, 7.0)), 60.0)
+    assert result["energy_counter"]["rate_w"] is None
+    assert result["energy_counter"]["agrees"] is None
+
+
+def test_phases_are_measured_apart() -> None:
+    def phase(t: float) -> str:
+        return "battery (auto), idle soft" if t < 100 else "battery (auto), idle deep"
+
+    def power(t: float) -> float:
+        return 7.2 if t < 100 else 6.6
+
+    result = cli.summarize(_samples(300, power, _stepped(40.0, 6.8), phase), 300.0)
+    assert result["changed_during"] is True
+    deep, soft = result["phases"]
+    assert deep == {
+        "phase": "battery (auto), idle deep",
+        "seconds": 200.0,
+        "power_w": 6.6,
+    }
+    assert soft == {
+        "phase": "battery (auto), idle soft",
+        "seconds": 100.0,
+        "power_w": 7.2,
+    }

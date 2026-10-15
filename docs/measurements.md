@@ -119,11 +119,30 @@ elitebook-thermal-profile probe
 `measure` samples what the battery delivers every two seconds, which is the
 whole laptop's draw, so it needs the charger unplugged; it stops early if you
 plug in. It reports the average, minimum and maximum, the CPU temperature, how
-long a full and the current battery would last at that draw, and which
-profile and idle stage were in force. From 30 seconds on it also derives the
-draw from the fall in stored energy, an independent check on the first
-figure. Firmware refreshes the reading every few seconds, so runs shorter than
-a minute are rough. `--json` prints the same as one JSON object.
+long a full and the current battery would last at that draw, and the profile
+and idle stage in force. `--json` prints the same as one JSON object.
+
+What the first runs on the 845 G8 taught, and how the report handles it:
+
+- **The firmware refreshes the power figure slowly**, sometimes not at all for
+  a whole minute (one run read 6.76 W in all 31 samples). The report says how
+  often the figure changed, and warns when it stood still for 20 s or half the
+  run: the average then rests on few real readings. Prefer runs of 5 minutes
+  or more.
+- **The stored energy counter moves in steps of about 0.1 Wh**, so the fall
+  between start and end is off by up to a step at each end: on the first
+  runs it gave 4.1, 14.4 and 3.6 W against 7.2, 6.6 and 6.8 W read directly.
+  The report times the steps instead, from the first change seen to the
+  last, and shows that figure only as a cross-check: when it lands within
+  25% of the direct reading it says they agree, otherwise it shows how far
+  apart they are. It needs the counter to move at least three times, so it
+  appears only on longer runs. The direct reading is the figure to use.
+- **The idle overlay comes and goes while you measure.** Every sample records
+  the profile and idle stage in force, and when they change the report gives
+  the time spent and the average draw in each, so soft and deep idle can be
+  compared from one long run without stopping the service. The power figure
+  lags a stage change by up to one firmware refresh, so short phases are
+  rough.
 
 To compare two settings, keep the workload the same: same apps open, same
 screen brightness, Wi-Fi in the same state, and let the machine settle a

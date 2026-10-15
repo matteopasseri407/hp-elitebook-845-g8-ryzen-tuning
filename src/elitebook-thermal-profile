@@ -354,14 +354,132 @@ def _stats(values: list[float]) -> dict[str, float] | None:
     }
 
 
+class Sample(typing.NamedTuple):
+    t: float  # seconds since the measurement began
+    power_w: float | None
+    energy_wh: float | None
+    temp_c: float | None
+    phase: str  # profile, source and idle stage in force at the time
+
+
+# A power reading that sits still for this long, or this share of the run,
+# is a firmware that refreshes slowly, not a laptop drawing a flat line.
+STALE_MIN_S = 20.0
+STALE_SHARE = 0.5
+# The energy counter cross-check agrees when it lands this close to the
+# direct reading.
+AGREE_SHARE = 0.25
+
+
+def _phase() -> str:
+    state = read_state(STATE_FILE)
+    return (
+        f"{state.get('profile', 'unknown')} ({state.get('source', 'unknown')}), "
+        f"idle {_idle_stage()}"
+    )
+
+
+def _power_updates(samples: list[Sample], elapsed: float) -> tuple[int, float]:
+    """(how often the power reading changed, its longest still stretch in s)."""
+    readings = [(s.t, s.power_w) for s in samples if s.power_w is not None]
+    if not readings:
+        return 0, 0.0
+    changes = 0
+    run_start = readings[0][0]
+    longest = 0.0
+    for (_, previous), (t, value) in zip(readings, readings[1:]):
+        if value != previous:
+            changes += 1
+            longest = max(longest, t - run_start)
+            run_start = t
+    longest = max(longest, elapsed - run_start)
+    return changes, round(longest, 1)
+
+
+def _energy_rate(samples: list[Sample]) -> dict[str, typing.Any]:
+    """The draw implied by the battery's stored energy counter.
+
+    The counter moves in steps (about 0.1 Wh on the HP tested), so the fall
+    between the first and last sample is off by up to a step at each end:
+    on a short run that is most of the reading. Timing the steps themselves,
+    from the first change seen to the last, removes that error and leaves
+    only the sampling interval at each end.
+    """
+    points = [(s.t, s.energy_wh) for s in samples if s.energy_wh is not None]
+    edges = [
+        (t, energy)
+        for (_, previous), (t, energy) in zip(points, points[1:])
+        if energy != previous
+    ]
+    result: dict[str, typing.Any] = {"steps": len(edges), "rate_w": None}
+    if len(edges) < 2:
+        return result
+    (t_first, e_first), (t_last, e_last) = edges[0], edges[-1]
+    if t_last <= t_first or e_last >= e_first:
+        return result
+    steps = sorted(abs(b - a) for (_, a), (_, b) in zip(edges, edges[1:]))
+    result.update(
+        rate_w=round((e_first - e_last) * 3600 / (t_last - t_first), 2),
+        window_s=round(t_last - t_first, 1),
+        step_wh=round(steps[len(steps) // 2], 3),
+    )
+    return result
+
+
+def summarize(samples: list[Sample], elapsed: float) -> dict[str, typing.Any]:
+    """Figures for a finished run; pure, so the tests can feed it samples."""
+    power = [s.power_w for s in samples if s.power_w is not None]
+    stats = _stats(power)
+    changes, still = _power_updates(samples, elapsed)
+    stale = len(power) >= 5 and (
+        changes == 0 or still >= max(STALE_MIN_S, STALE_SHARE * elapsed)
+    )
+    energy = _energy_rate(samples)
+    if energy["rate_w"] is not None and stats and stats["avg"] > 0:
+        gap = abs(energy["rate_w"] - stats["avg"]) / stats["avg"]
+        energy["differs_by"] = round(gap, 2)
+        energy["agrees"] = gap <= AGREE_SHARE
+    else:
+        energy["agrees"] = None
+
+    phases: dict[str, dict[str, typing.Any]] = {}
+    for index, sample in enumerate(samples):
+        following = samples[index + 1].t if index + 1 < len(samples) else elapsed
+        phase = phases.setdefault(sample.phase, {"seconds": 0.0, "power": []})
+        phase["seconds"] += max(0.0, following - sample.t)
+        if sample.power_w is not None:
+            phase["power"].append(sample.power_w)
+    by_phase = [
+        {
+            "phase": name,
+            "seconds": round(values["seconds"], 1),
+            "power_w": None
+            if not values["power"]
+            else round(sum(values["power"]) / len(values["power"]), 2),
+        }
+        for name, values in sorted(phases.items(), key=lambda kv: -kv[1]["seconds"])
+    ]
+    return {
+        "seconds": round(elapsed, 1),
+        "samples": len(power),
+        "power_w": stats,
+        "power_updates": changes,
+        "power_still_s": still,
+        "power_reading_stale": stale,
+        "energy_counter": energy,
+        "phases": by_phase,
+        "changed_during": len(by_phase) > 1,
+        "cpu_temp_c": _stats([s.temp_c for s in samples if s.temp_c is not None]),
+    }
+
+
 def measure(seconds: int) -> dict[str, typing.Any]:
     """Sample the battery draw for ``seconds``; dies when plugged in.
 
-    The battery is the only honest meter a laptop has, and only while it
-    discharges: on AC it reports the charge rate. Firmware refreshes the
-    reading every few seconds, so samples are averaged, and over a long
-    enough window the fall in stored energy gives a second, independent
-    figure.
+    The battery is the only meter a laptop has, and only while it
+    discharges: on AC it reports the charge rate. The direct power reading
+    is the figure; the stored energy counter is only a cross-check, because
+    it moves in coarse steps.
     """
     supply = common.battery_device(POWER_SUPPLY_DIR)
     if supply is None:
@@ -371,24 +489,23 @@ def measure(seconds: int) -> dict[str, typing.Any]:
             "unplug the charger first: on AC the battery reports its charge "
             "rate, not what the laptop draws"
         )
-    state = read_state(STATE_FILE)
-    start = (state.get("profile", "unknown"), state.get("source", "unknown"))
-    start_idle = _idle_stage()
     interval = _measure_interval()
-    energy_start = common.battery_energy_wh(supply)
     began = time.monotonic()
     deadline = began + seconds
-    power: list[float] = []
-    temps: list[float] = []
+    samples: list[Sample] = []
     ended = "complete"
     try:
         while True:
-            value = common.battery_power_w(supply)
-            if value is not None:
-                power.append(value)
             temp = common.cpu_temperature_c(HWMON_DIR)
-            if temp is not None:
-                temps.append(float(temp))
+            samples.append(
+                Sample(
+                    t=time.monotonic() - began,
+                    power_w=common.battery_power_w(supply),
+                    energy_wh=common.battery_energy_wh(supply),
+                    temp_c=None if temp is None else float(temp),
+                    phase=_phase(),
+                )
+            )
             if on_ac_power():
                 ended = "plugged in"
                 break
@@ -398,40 +515,26 @@ def measure(seconds: int) -> dict[str, typing.Any]:
             time.sleep(min(interval, deadline - now))
     except KeyboardInterrupt:
         ended = "interrupted"
-    elapsed = time.monotonic() - began
-    energy_end = common.battery_energy_wh(supply)
-    state = read_state(STATE_FILE)
-    end = (state.get("profile", "unknown"), state.get("source", "unknown"))
-
-    from_energy = None
-    used = None
-    if energy_start is not None and energy_end is not None and elapsed >= 30:
-        used = energy_start - energy_end
-        if used > 0:
-            from_energy = round(used * 3600 / elapsed, 2)
-    stats = _stats(power)
+    result = summarize(samples, time.monotonic() - began)
+    stats = result["power_w"]
     runtime: dict[str, float | None] = {"full_h": None, "remaining_h": None}
     if stats and stats["avg"] > 0:
         full = common.battery_energy_wh(supply, "energy_full")
         if full is not None:
             runtime["full_h"] = round(full / stats["avg"], 1)
-        if energy_end is not None:
-            runtime["remaining_h"] = round(energy_end / stats["avg"], 1)
-    return {
-        "ended": ended,
-        "seconds": round(elapsed, 1),
-        "samples": len(power),
-        "power_w": stats,
-        "power_from_energy_w": from_energy,
-        "energy_used_wh": None if used is None else round(used, 3),
-        "cpu_temp_c": _stats(temps),
-        "battery_percent": common.battery_capacity(POWER_SUPPLY_DIR),
-        "runtime": runtime,
-        "profile": end[0],
-        "source": end[1],
-        "idle_stage": _idle_stage(),
-        "changed_during": start != end or start_idle != _idle_stage(),
-    }
+        left = common.battery_energy_wh(supply)
+        if left is not None:
+            runtime["remaining_h"] = round(left / stats["avg"], 1)
+    state = read_state(STATE_FILE)
+    result.update(
+        ended=ended,
+        battery_percent=common.battery_capacity(POWER_SUPPLY_DIR),
+        runtime=runtime,
+        profile=state.get("profile", "unknown"),
+        source=state.get("source", "unknown"),
+        idle_stage=_idle_stage(),
+    )
+    return result
 
 
 def print_measurement(result: dict[str, typing.Any]) -> None:
@@ -439,24 +542,48 @@ def print_measurement(result: dict[str, typing.Any]) -> None:
     if power is None:
         die("the battery reported no power or current reading")
     print(
-        f"Measured {result['seconds']:.0f} s on battery ({result['samples']} samples), "
-        f"profile {result['profile']} ({result['source']}), idle {result['idle_stage']}"
+        f"Measured {result['seconds']:.0f} s on battery ({result['samples']} samples)."
     )
     if result["ended"] != "complete":
         print(f"Stopped early: {result['ended']}.")
-    if result["changed_during"]:
-        print(
-            "The profile or idle stage changed while measuring; the figures mix both."
-        )
     print(
         f"  Draw:         avg {power['avg']:.1f} W, "
         f"min {power['min']:.1f} W, max {power['max']:.1f} W"
     )
-    if result["power_from_energy_w"] is not None:
+    updates = result["power_updates"]
+    if updates:
+        every = result["seconds"] / updates
+        spacing = f"{every:.0f}" if every >= 10 else f"{every:.1f}"
         print(
-            f"  From energy:  {result['power_from_energy_w']:.1f} W "
-            f"(battery fell {result['energy_used_wh']:.3f} Wh)"
+            f"  Reading:      the battery updated its power figure {updates} times "
+            f"(about every {spacing} s)"
         )
+    else:
+        print("  Reading:      the battery never updated its power figure")
+    energy = result["energy_counter"]
+    if energy["rate_w"] is None:
+        print(
+            "  Cross-check:  none; the energy counter moved fewer than three "
+            "times (measure longer)"
+        )
+    elif energy["agrees"]:
+        print(
+            f"  Cross-check:  energy counter {energy['rate_w']:.1f} W over "
+            f"{energy['window_s']:.0f} s, agrees within {AGREE_SHARE:.0%}"
+        )
+    else:
+        print(
+            f"  Cross-check:  energy counter {energy['rate_w']:.1f} W over "
+            f"{energy['window_s']:.0f} s, {energy['differs_by']:.0%} away from the "
+            "direct reading; trust neither to better than that"
+        )
+    if result["changed_during"]:
+        print("  By phase (the profile or idle stage changed while measuring):")
+        for phase in result["phases"]:
+            watts = "-" if phase["power_w"] is None else f"{phase['power_w']:.1f} W"
+            print(f"    {phase['phase']:<40} {phase['seconds']:>5.0f} s  {watts}")
+    else:
+        print(f"  Phase:        {result['phases'][0]['phase']}")
     temp = result["cpu_temp_c"]
     if temp is not None:
         print(f"  CPU temp:     avg {temp['avg']:.0f} °C, max {temp['max']:.0f} °C")
@@ -466,6 +593,12 @@ def print_measurement(result: dict[str, typing.Any]) -> None:
         if runtime["remaining_h"] is not None:
             line += f", what is left about {runtime['remaining_h']:.1f} h"
         print(line + ".")
+    if result["power_reading_stale"]:
+        print(
+            f"Warning: the power reading stood still for {result['power_still_s']:.0f} s "
+            "of the run. The firmware refreshes it slowly, so the average rests on "
+            "few real readings; measure for longer."
+        )
 
 
 def print_probe(as_json: bool) -> None:
