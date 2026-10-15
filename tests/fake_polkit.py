@@ -74,7 +74,12 @@ def main() -> int:
         invocation.return_value(GLib.Variant("((bba{ss}))", ((allowed, False, {}),)))
 
     node = Gio.DBusNodeInfo.new_for_xml(XML)
-    connection.register_object(
+    # register_object is deprecated; its replacement arrived in GLib 2.84.
+    if hasattr(connection, "register_object_with_closures2"):
+        register = connection.register_object_with_closures2
+    else:
+        register = connection.register_object
+    register(
         "/org/freedesktop/PolicyKit1/Authority", node.interfaces[0], on_call, None, None
     )
     loop = GLib.MainLoop()

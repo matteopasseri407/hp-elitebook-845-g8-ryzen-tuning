@@ -211,6 +211,8 @@ fi
   setting and forwards authorized requests to the daemon's control socket
 - Ship the D-Bus policy, activation file and polkit action; recommend
   python3-gobject-base and polkit
+- The front end no longer logs Python deprecation warnings at start-up; it
+  uses the newer GLib calls where they exist and the older ones otherwise
 - New PCIE_ASPM profile key, off by default; every built-in profile keeps
   the boot PCIe link power policy
 - New read-only commands: measure reports the battery draw, CPU temperature

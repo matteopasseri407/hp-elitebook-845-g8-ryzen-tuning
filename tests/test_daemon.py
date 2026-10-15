@@ -253,6 +253,7 @@ class DaemonTests(unittest.TestCase):
         policy.write_text("[default] performance powersave powersupersave\n")
         before = policy.stat().st_mtime_ns
         ac_online = self.root / "power-supply" / "AC" / "online"
+        self._wait_for(lambda: (self.state / "current").exists(), "first apply")
 
         # Stock configuration: a battery and back trip writes nothing.
         ac_online.write_text("0\n")

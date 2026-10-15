@@ -197,9 +197,12 @@ class Service:
 
     def register(self) -> None:
         node = self.gio.DBusNodeInfo.new_for_xml(INTROSPECTION_XML)
-        self.connection.register_object(
-            OBJECT_PATH, node.interfaces[0], self._on_call, None, None
-        )
+        # register_object is deprecated; its replacement arrived in GLib 2.84.
+        if hasattr(self.connection, "register_object_with_closures2"):
+            register = self.connection.register_object_with_closures2
+        else:
+            register = self.connection.register_object
+        register(OBJECT_PATH, node.interfaces[0], self._on_call, None, None)
 
     def _fail(self, invocation: typing.Any, refused: Refused) -> None:
         invocation.return_dbus_error(ERROR_PREFIX + refused.name, refused.message)
@@ -352,8 +355,18 @@ def main() -> int:
         loop.quit()
         return False
 
-    GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGTERM, stop)
-    GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGINT, stop)
+    # GLib.unix_signal_add is deprecated; GLibUnix needs GLib 2.79.2.
+    try:
+        gi.require_version("GLibUnix", "2.0")
+        from gi.repository import (  # type: ignore[import-untyped, import-not-found, unused-ignore, attr-defined]
+            GLibUnix,
+        )
+
+        add_signal = GLibUnix.signal_add
+    except (ImportError, ValueError):
+        add_signal = GLib.unix_signal_add
+    add_signal(GLib.PRIORITY_DEFAULT, signal.SIGTERM, stop)
+    add_signal(GLib.PRIORITY_DEFAULT, signal.SIGINT, stop)
     try:
         loop.run()
     finally:
