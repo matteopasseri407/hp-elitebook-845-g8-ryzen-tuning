@@ -84,6 +84,11 @@ elitebook-thermal-profile status
 # JSON status for scripts and status bars
 elitebook-thermal-profile status --json
 
+# Measure what the laptop draws from the battery (unplugged), and list the
+# power knobs this machine exposes; both read only, no root needed
+elitebook-thermal-profile measure 300
+elitebook-thermal-profile probe
+
 # Manually switch profile (auto follows AC/battery/low-battery rules)
 # These ask the running service; no edits to system files are needed.
 sudo elitebook-thermal-profile auto

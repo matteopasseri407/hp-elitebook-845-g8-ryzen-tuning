@@ -106,6 +106,36 @@ While a Steam game is detected (`gaming`), the idle overlay is suppressed entire
 
 On the original tuned system, the Steam watcher sample showed roughly 168 ms of CPU over about 65 seconds and around 6-7 MB resident memory. Treat this as an order-of-magnitude reference, not a guarantee across systems.
 
+## Measure It Yourself
+
+Two read-only commands, no root needed, give the numbers to compare profiles,
+idle stages and settings with:
+
+```bash
+elitebook-thermal-profile measure 300    # 5 minutes, unplugged
+elitebook-thermal-profile probe
+```
+
+`measure` samples what the battery delivers every two seconds, which is the
+whole laptop's draw, so it needs the charger unplugged; it stops early if you
+plug in. It reports the average, minimum and maximum, the CPU temperature, how
+long a full and the current battery would last at that draw, and which
+profile and idle stage were in force. From 30 seconds on it also derives the
+draw from the fall in stored energy, an independent check on the first
+figure. Firmware refreshes the reading every few seconds, so runs shorter than
+a minute are rough. `--json` prints the same as one JSON object.
+
+To compare two settings, keep the workload the same: same apps open, same
+screen brightness, Wi-Fi in the same state, and let the machine settle a
+minute before starting. A desktop left alone shows the idle overlay at work;
+run `elitebook-thermal-profile status` to see which stage it reached.
+
+`probe` lists every power knob the kernel exposes on this machine, such as
+CPU driver and EPP, PCIe ASPM policy, audio codec power saving, amdgpu power
+level and panel power saving, USB autosuspend and NVMe power states, with the
+current value or `-` where the knob does not exist. It changes nothing; it
+says what a profile could change here.
+
 ## What Would Make The Data Stronger
 
 Good community test reports should include:
@@ -119,3 +149,4 @@ Good community test reports should include:
 - `sensors` output
 - `ryzenadj -i` output before and after applying a profile
 - whether the machine is plugged in or on battery
+- `elitebook-thermal-profile probe` output, and `measure` runs on battery

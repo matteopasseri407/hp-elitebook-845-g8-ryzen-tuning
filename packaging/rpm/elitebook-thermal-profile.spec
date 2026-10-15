@@ -211,6 +211,8 @@ fi
   setting and forwards authorized requests to the daemon's control socket
 - Ship the D-Bus policy, activation file and polkit action; recommend
   python3-gobject-base and polkit
+- New read-only commands: measure reports the battery draw, CPU temperature
+  and runtime; probe lists the power knobs the kernel exposes
 
 * Mon Oct 12 2026 Matteo Passeri <matteopasseri407@users.noreply.github.com> - 1.0.0-1
 - Replace the dispatcher, udev rule, sleep hook, idle watcher and Steam

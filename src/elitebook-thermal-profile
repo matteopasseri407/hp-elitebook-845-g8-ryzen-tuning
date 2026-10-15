@@ -65,6 +65,8 @@ PROFILE_CONF = _path(
 HWMON_DIR = _path("ELITEBOOK_HWMON_DIR", "/sys/class/hwmon")
 PCI_DEVICES_DIR = _path("ELITEBOOK_PCI_DEVICES_DIR", "/sys/bus/pci/devices")
 DRM_DIR = _path("ELITEBOOK_DRM_DIR", "/sys/class/drm")
+SYSFS_ROOT = _path("ELITEBOOK_SYSFS_ROOT", "/sys")
+PROC_CMDLINE = _path("ELITEBOOK_PROC_CMDLINE", "/proc/cmdline")
 
 # A wakeup more than this far ahead of the monotonic clock means the machine
 # slept in between: CLOCK_BOOTTIME counts suspend, CLOCK_MONOTONIC does not.
@@ -125,6 +127,10 @@ Profiles (need root; the service applies them):
 Commands:
   status            Show what is applied right now (no root needed)
   status --json     Same as status, as JSON for scripts (no root needed)
+  measure [SECONDS] Measure what the laptop draws from the battery, default
+                    60 s; run it unplugged (no root needed, --json too)
+  probe             List the power knobs this machine exposes and their
+                    current values (no root needed, --json too)
   reassert          Ask the service to rewrite every setting now
   daemon            Run the service (systemd starts this)
   apply-once [P]    Apply profile P (default auto) once, without the service
@@ -321,6 +327,162 @@ def print_status_json() -> None:
         "updated": get("updated"),
     }
     print(json.dumps(payload, sort_keys=True))
+
+
+# --- measuring --------------------------------------------------------------
+
+
+def _measure_interval() -> float:
+    try:
+        return max(0.01, float(os.environ.get("ELITEBOOK_MEASURE_INTERVAL", "2")))
+    except ValueError:
+        return 2.0
+
+
+def _idle_stage() -> str:
+    idle = read_state(IDLE_FILE)
+    return idle.get("stage", "none") if idle.get("active") == "1" else "none"
+
+
+def _stats(values: list[float]) -> dict[str, float] | None:
+    if not values:
+        return None
+    return {
+        "avg": round(sum(values) / len(values), 2),
+        "min": round(min(values), 2),
+        "max": round(max(values), 2),
+    }
+
+
+def measure(seconds: int) -> dict[str, typing.Any]:
+    """Sample the battery draw for ``seconds``; dies when plugged in.
+
+    The battery is the only honest meter a laptop has, and only while it
+    discharges: on AC it reports the charge rate. Firmware refreshes the
+    reading every few seconds, so samples are averaged, and over a long
+    enough window the fall in stored energy gives a second, independent
+    figure.
+    """
+    supply = common.battery_device(POWER_SUPPLY_DIR)
+    if supply is None:
+        die("no battery found under " + str(POWER_SUPPLY_DIR))
+    if on_ac_power() or common.battery_status(supply) == "Charging":
+        die(
+            "unplug the charger first: on AC the battery reports its charge "
+            "rate, not what the laptop draws"
+        )
+    state = read_state(STATE_FILE)
+    start = (state.get("profile", "unknown"), state.get("source", "unknown"))
+    start_idle = _idle_stage()
+    interval = _measure_interval()
+    energy_start = common.battery_energy_wh(supply)
+    began = time.monotonic()
+    deadline = began + seconds
+    power: list[float] = []
+    temps: list[float] = []
+    ended = "complete"
+    try:
+        while True:
+            value = common.battery_power_w(supply)
+            if value is not None:
+                power.append(value)
+            temp = common.cpu_temperature_c(HWMON_DIR)
+            if temp is not None:
+                temps.append(float(temp))
+            if on_ac_power():
+                ended = "plugged in"
+                break
+            now = time.monotonic()
+            if now >= deadline:
+                break
+            time.sleep(min(interval, deadline - now))
+    except KeyboardInterrupt:
+        ended = "interrupted"
+    elapsed = time.monotonic() - began
+    energy_end = common.battery_energy_wh(supply)
+    state = read_state(STATE_FILE)
+    end = (state.get("profile", "unknown"), state.get("source", "unknown"))
+
+    from_energy = None
+    used = None
+    if energy_start is not None and energy_end is not None and elapsed >= 30:
+        used = energy_start - energy_end
+        if used > 0:
+            from_energy = round(used * 3600 / elapsed, 2)
+    stats = _stats(power)
+    runtime: dict[str, float | None] = {"full_h": None, "remaining_h": None}
+    if stats and stats["avg"] > 0:
+        full = common.battery_energy_wh(supply, "energy_full")
+        if full is not None:
+            runtime["full_h"] = round(full / stats["avg"], 1)
+        if energy_end is not None:
+            runtime["remaining_h"] = round(energy_end / stats["avg"], 1)
+    return {
+        "ended": ended,
+        "seconds": round(elapsed, 1),
+        "samples": len(power),
+        "power_w": stats,
+        "power_from_energy_w": from_energy,
+        "energy_used_wh": None if used is None else round(used, 3),
+        "cpu_temp_c": _stats(temps),
+        "battery_percent": common.battery_capacity(POWER_SUPPLY_DIR),
+        "runtime": runtime,
+        "profile": end[0],
+        "source": end[1],
+        "idle_stage": _idle_stage(),
+        "changed_during": start != end or start_idle != _idle_stage(),
+    }
+
+
+def print_measurement(result: dict[str, typing.Any]) -> None:
+    power = result["power_w"]
+    if power is None:
+        die("the battery reported no power or current reading")
+    print(
+        f"Measured {result['seconds']:.0f} s on battery ({result['samples']} samples), "
+        f"profile {result['profile']} ({result['source']}), idle {result['idle_stage']}"
+    )
+    if result["ended"] != "complete":
+        print(f"Stopped early: {result['ended']}.")
+    if result["changed_during"]:
+        print(
+            "The profile or idle stage changed while measuring; the figures mix both."
+        )
+    print(
+        f"  Draw:         avg {power['avg']:.1f} W, "
+        f"min {power['min']:.1f} W, max {power['max']:.1f} W"
+    )
+    if result["power_from_energy_w"] is not None:
+        print(
+            f"  From energy:  {result['power_from_energy_w']:.1f} W "
+            f"(battery fell {result['energy_used_wh']:.3f} Wh)"
+        )
+    temp = result["cpu_temp_c"]
+    if temp is not None:
+        print(f"  CPU temp:     avg {temp['avg']:.0f} °C, max {temp['max']:.0f} °C")
+    runtime = result["runtime"]
+    if runtime["full_h"] is not None:
+        line = f"  At this draw: a full battery lasts about {runtime['full_h']:.1f} h"
+        if runtime["remaining_h"] is not None:
+            line += f", what is left about {runtime['remaining_h']:.1f} h"
+        print(line + ".")
+
+
+def print_probe(as_json: bool) -> None:
+    rows = common.power_inventory(SYSFS_ROOT, PROC_CMDLINE)
+    if as_json:
+        payload: dict[str, dict[str, str | None]] = {}
+        for group, name, value in rows:
+            payload.setdefault(group, {})[name] = value or None
+        print(json.dumps(payload, sort_keys=True))
+        return
+    print("Power knobs on this machine (read only; - means not present)")
+    current = ""
+    for group, name, value in rows:
+        if group != current:
+            print(f"\n{group}")
+            current = group
+        print(f"  {name:<26} {value or '-'}")
 
 
 # --- hardware and settings -------------------------------------------------
@@ -866,6 +1028,26 @@ def main(argv: list[str]) -> int:
             print_status_json()
         else:
             print_status()
+        return 0
+    if command == "measure":
+        args = argv[1:]
+        as_json = "--json" in args
+        numbers = [a for a in args if a != "--json"]
+        if len(numbers) > 1 or (numbers and not numbers[0].isdigit()):
+            usage()
+            return 2
+        seconds = int(numbers[0]) if numbers else 60
+        if seconds < 1:
+            usage()
+            return 2
+        result = measure(seconds)
+        if as_json:
+            print(json.dumps(result, sort_keys=True))
+        else:
+            print_measurement(result)
+        return 0
+    if command == "probe":
+        print_probe(len(argv) > 1 and argv[1] == "--json")
         return 0
     if command == "--check-hardware":
         described = check_hardware()

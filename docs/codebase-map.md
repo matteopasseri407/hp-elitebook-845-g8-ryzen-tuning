@@ -105,6 +105,9 @@ Modulo helper stdlib-only condiviso. Legge sysfs, trova RyzenAdj, scrive policy 
 | `on_ac_power` | function | L65 | `def on_ac_power(power_supply_dir: Path, *, default_when_unknown: bool = False) -> bool` |
 | `battery_device` | function | L90 | `def battery_device(power_supply_dir: Path) -> Path \| None` |
 | `battery_capacity` | function | L104 | `def battery_capacity(power_supply_dir: Path) -> int \| None` |
+| `battery_power_w` | function | | potenza erogata dalla batteria in W, da `power_now` o da `current_now` × `voltage_now` |
+| `battery_energy_wh` | function | | energia in Wh, da `energy_*` o da `charge_*` alla tensione di progetto |
+| `power_inventory` | function | | solo lettura: ogni manopola energetica esposta dal kernel (CPU, platform profile, ASPM, audio, amdgpu, USB, NVMe), per `probe` |
 | `cpu_temperature_c` | function | L140 | `def cpu_temperature_c(hwmon_dir: Path) -> int \| None` |
 | `find_ryzenadj` | function | L146 | `def find_ryzenadj(configured: str, search_paths: list[str]) -> str \| None` |
 | `kernel_lockdown_mode` | function | L170 | `def kernel_lockdown_mode(lockdown_path: Path) -> str` |
@@ -193,6 +196,8 @@ Daemon e CLI in un solo file. `daemon` è il servizio systemd e l'unico processo
 | `print_thermal_record` | function | L157 | `def print_thermal_record(thermal: dict[str, str]) -> None` |
 | `print_status` | function | L178 | `def print_status() -> None`: testo di `status`, con la riga `Idle:` |
 | `print_status_json` | function | L272 | `def print_status_json() -> None`: JSON di `status --json`, con la chiave `idle_stage` |
+| `measure` | function | | `measure [SECONDI]`: campiona il consumo dalla batteria (solo scollegato), temperatura, autonomia stimata; si ferma se si collega l'alimentatore |
+| `print_probe` | function | | `probe`: stampa `common.power_inventory`, testo o `--json` |
 | `detect_cpu_model` | function | L322 | `def detect_cpu_model() -> str` |
 | `check_hardware` | function | L333 | `def check_hardware() -> str`: esce se la macchina non è supportata |
 | `find_ryzenadj` | function | L346 | `def find_ryzenadj() -> str \| None` |
@@ -320,6 +325,7 @@ Il daemon è l'unico scrittore delle impostazioni, quindi quasi tutti i file di 
   - `tests/test_common.py`: helper sysfs condivisi, applicazione di policy CPU, SMU, runtime PM e pannello.
   - `tests/test_power_guard.py`: verifica report termico, stati SMU e scrittura atomica guard.
   - `tests/test_hibernate_preflight.py`: verifica validazione file di configurazione btrfs.
+  - `tests/test_measure.py`: `measure` e `probe` contro fixture sysfs e batteria finta (anche alimentatore collegato a metà misura).
   - `tests/test_dbus_frontend.py`: il front end D-Bus. Le parti pure girano ovunque; i test end-to-end avviano un bus privato, un polkit finto (`tests/fake_polkit.py`), il daemon vero su fixture sysfs e il front end vero, e cambiano profilo con il `profileSwitcher.js` vero sotto `gjs` (`tests/gjs_switch_profile.js`). Servono root, PyGObject, `dbus-daemon` e `gjs`.
 - **Integrazione di sistema (`tests/*.sh`):**
   - `test-platform-detection.sh`, `test-hardware-guard.sh`, `test-profile-config.sh`, `test-smu-fallback.sh`, `test-thermal-report.sh`, `test-installer-ryzen-smu.sh`, `test-version-consistency.sh`, `verify-systemd-units.sh`, `check-systemd-security.sh`, `check-no-local-paths.sh`.

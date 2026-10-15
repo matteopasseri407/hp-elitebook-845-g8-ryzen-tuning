@@ -11,6 +11,9 @@ elitebook-thermal-profile (1.1.0) unstable; urgency=medium
   * Recommend python3-gi and polkitd; the GNOME indicator depends on
     python3-gi.
   * Point Secure Boot users at the new ryzen-smu-dkms package.
+  * New read-only commands: `measure [SECONDS]` reports what the laptop
+    draws from the battery, its CPU temperature and the runtime that draw
+    allows; `probe` lists the power knobs the kernel exposes and their values.
 
  -- Matteo Passeri <matteopasseri407@users.noreply.github.com>  Thu, 15 Oct 2026 12:00:00 +0200
 
