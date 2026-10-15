@@ -1,0 +1,26 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: ryzen_smu
+Upstream-Contact: https://github.com/amkillam/ryzen_smu/issues
+Source: https://github.com/amkillam/ryzen_smu
+
+Files: *
+Copyright: 2020 Leonardo Gates <leogatesx9r@protonmail.com>
+           the ryzen_smu contributors
+License: GPL-2.0-only
+ This program is free software; you can redistribute it and/or modify it under
+ the terms of the GNU General Public License version 2 as published by the Free
+ Software Foundation.
+ .
+ On Debian systems, the complete text of the GNU General Public License version
+ 2 can be found in /usr/share/common-licenses/GPL-2.
+
+Files: debian/*
+Copyright: 2026 Matteo Passeri
+License: GPL-3.0-or-later
+ This packaging is free software: you can redistribute it and/or modify it under
+ the terms of the GNU General Public License as published by the Free Software
+ Foundation, either version 3 of the License, or (at your option) any later
+ version.
+ .
+ On Debian systems, the complete text of the GNU General Public License version 3
+ can be found in /usr/share/common-licenses/GPL-3.

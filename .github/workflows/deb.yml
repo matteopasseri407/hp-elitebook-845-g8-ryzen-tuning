@@ -13,6 +13,9 @@ permissions:
 env:
   RYZENADJ_VERSION: "0.17.0"
   RYZENADJ_SHA256: "848ac9d86ff65d30f5e2c8600aac2613f0f10003b0d6f0e516a54761d7345d44"
+  # ryzen_smu has no release tags, so it is pinned by commit; the Debian
+  # changelog version names the same commit.
+  RYZEN_SMU_COMMIT: "d2983668300dd2a598e5a7dc40e71ce0678cc270"
 
 jobs:
   build:
@@ -261,10 +264,88 @@ jobs:
           path: dist/*.deb
           if-no-files-found: error
 
+  ryzen-smu-dkms:
+    # The module is compiled on the user's machine, by DKMS, for each kernel,
+    # so the package is checked by installing it and letting DKMS build the
+    # module against the kernel each release ships.
+    name: Build ryzen-smu-dkms on Ubuntu ${{ matrix.release }}
+    runs-on: ubuntu-latest
+    container: ubuntu:${{ matrix.release }}
+    strategy:
+      fail-fast: false
+      matrix:
+        release: ["24.04", "26.04"]
+    steps:
+      - name: Install packaging tooling and the release's kernel headers
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            build-essential ca-certificates debhelper dh-dkms dkms dpkg-dev \
+            fakeroot git kmod lintian linux-headers-generic
+
+      - uses: actions/checkout@v4
+        with:
+          path: tuning
+
+      - name: Fetch ryzen_smu at the pinned commit
+        run: |
+          set -eu
+          git init -q ryzen_smu
+          git -C ryzen_smu fetch -q --depth 1 https://github.com/amkillam/ryzen_smu "$RYZEN_SMU_COMMIT"
+          git -C ryzen_smu checkout -q FETCH_HEAD
+          test "$(git -C ryzen_smu rev-parse HEAD)" = "$RYZEN_SMU_COMMIT"
+          short="$(printf '%s' "$RYZEN_SMU_COMMIT" | cut -c1-7)"
+          if ! head -n 1 tuning/packaging/debian-ryzen-smu-dkms/changelog | grep -q "\.${short}-"; then
+            echo "the Debian changelog version does not name commit ${short}" >&2
+            exit 1
+          fi
+
+      - name: Build ryzen-smu-dkms
+        run: |
+          cp -a tuning/packaging/debian-ryzen-smu-dkms ryzen_smu/debian
+          (cd ryzen_smu && dpkg-buildpackage -us -uc -b)
+          mkdir -p dist
+          mv ./*.deb dist/
+
+      - name: Lintian
+        run: lintian --fail-on error --tag-display-limit 0 dist/*.deb
+
+      - name: Install and let DKMS build the module
+        run: |
+          set -eu
+          DEBIAN_FRONTEND=noninteractive apt-get install -y ./dist/ryzen-smu-dkms_*.deb
+          kernel="$(ls /usr/src | sed -n 's/^linux-headers-\(.*-generic\)$/\1/p' | sort -V | tail -n 1)"
+          echo "kernel headers: $kernel"
+          dkms status
+          # The postinst builds for every kernel with headers; build here
+          # too in case it skipped this one, then demand an installed module.
+          dkms install -m ryzen_smu -v "$(dpkg-query -W -f='${Version}' ryzen-smu-dkms | sed 's/-[^-]*$//')" -k "$kernel" || true
+          dkms status | grep -E "ryzen_smu/.*, ${kernel}, .*: installed"
+          module="$(find "/lib/modules/${kernel}" -name 'ryzen_smu.ko*' | head -n 1)"
+          test -n "$module"
+          # RyzenAdj only uses the module at 0.1.6 or later in the 0.1 series.
+          modinfo -F version "$module" | grep -Eq '^0\.1\.([6-9]|[1-9][0-9]+)$'
+          test -f /usr/lib/modules-load.d/ryzen_smu.conf
+
+      - name: Verify removal is clean
+        run: |
+          set -eu
+          DEBIAN_FRONTEND=noninteractive apt-get purge -y ryzen-smu-dkms
+          test -z "$(find /lib/modules -name 'ryzen_smu.ko*')"
+          test ! -e /usr/lib/modules-load.d/ryzen_smu.conf
+
+      # Architecture independent: one copy is enough for the release.
+      - uses: actions/upload-artifact@v4
+        if: matrix.release == '24.04'
+        with:
+          name: ryzen-smu-dkms
+          path: dist/*.deb
+          if-no-files-found: error
+
   release:
     name: Attach packages to the release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [build, ryzenadj-next]
+    needs: [build, ryzenadj-next, ryzen-smu-dkms]
     runs-on: ubuntu-latest
     permissions:
       contents: write

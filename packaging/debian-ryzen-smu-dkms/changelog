@@ -1,0 +1,7 @@
+ryzen-smu (0.1.7+git20260815.d298366-1) unstable; urgency=medium
+
+  * Initial Debian and Ubuntu DKMS packaging of the ryzen_smu module, from a
+    pinned upstream commit of the maintained fork, for full SMU control with
+    Secure Boot left on.
+
+ -- Matteo Passeri <matteopasseri407@users.noreply.github.com>  Thu, 15 Oct 2026 12:00:00 +0200

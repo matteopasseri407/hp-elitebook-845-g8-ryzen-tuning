@@ -369,11 +369,24 @@ secure_boot_state() {
   echo "unavailable"
 }
 
+# RyzenAdj reaches the SMU through the ryzen_smu kernel module when a
+# compatible one (0.1.6 or later in the 0.1 series, RyzenAdj's own test) is
+# loaded, and only otherwise through /dev/mem, which lockdown blocks.
+ryzen_smu_module_ready() {
+  local version
+  version="$(read_trimmed "${ELITEBOOK_RYZEN_SMU_DIR:-/sys/kernel/ryzen_smu_drv}/drv_version" 2>/dev/null)" || return 1
+  [[ "$version" =~ ^0\.1\.([0-9]+)$ ]] && ((BASH_REMATCH[1] >= 6))
+}
+
 confirm_lockdown_if_needed() {
   local lockdown reply secure_boot
 
   lockdown="$(kernel_lockdown_mode)"
   [[ "$lockdown" = "none" || "$lockdown" = "unavailable" ]] && return
+  if ryzen_smu_module_ready; then
+    echo "Kernel lockdown is active (${lockdown}), but the ryzen_smu module is loaded, so RyzenAdj does not need /dev/mem."
+    return
+  fi
 
   secure_boot="$(secure_boot_state)"
   cat >&2 <<EOF
@@ -382,6 +395,8 @@ WARNING: kernel lockdown is active (${lockdown}); Secure Boot is ${secure_boot}.
 RyzenAdj may not be able to control SMU limits through /dev/mem under lockdown.
 The installer can still install the profile scripts, and EPP/frequency/boost
 sysfs fallback control remains available, but full SMU tuning may degrade.
+To keep Secure Boot on with full SMU control, install the signed ryzen_smu
+module first; see docs/ubuntu.md, "Keep Secure Boot and use ryzen_smu".
 EOF
 
   if [[ ! -t 0 ]]; then

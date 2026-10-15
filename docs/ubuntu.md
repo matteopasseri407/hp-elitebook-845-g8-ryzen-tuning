@@ -35,11 +35,12 @@ reported as a fault on a Fedora install but treated as normal here.
 This is the one thing that decides whether you get full control or a degraded
 fallback, and **Ubuntu enables Secure Boot by default on most installs**.
 
-RyzenAdj reaches the SMU in two ways: it tries the `ryzen_smu` kernel module
-first, then falls back to `/dev/mem`. Secure Boot puts the kernel into
-lockdown mode, and lockdown blocks the `/dev/mem` path and refuses unsigned
-modules. Without one of them, the SMU limits — the sustained power envelope
-and the thermal target, the reason this project exists — cannot be written.
+RyzenAdj reaches the SMU in two ways: it uses the `ryzen_smu` kernel module
+when a compatible one is loaded, and falls back to `/dev/mem` otherwise.
+Secure Boot puts the kernel into lockdown mode, and lockdown blocks the
+`/dev/mem` path and refuses unsigned modules. Without one of them, the SMU
+limits — the sustained power envelope and the thermal target, the reason this
+project exists — cannot be written.
 
 Check what you have:
 
@@ -79,13 +80,54 @@ grep smu= /run/elitebook-thermal-profile/current
 sudo elitebook-power-guard check
 ```
 
-**3. Keep Secure Boot and sign the `ryzen_smu` module.** RyzenAdj's upstream
-documentation describes installing that module through DKMS and enrolling the
-UEFI keys DKMS generates, which makes the module loadable under Secure Boot.
-Because RyzenAdj prefers the module over `/dev/mem`, this should restore full
-SMU control with Secure Boot left on. **This path is not packaged, not
-automated, and not verified by this project** — no machine here has run it. If
-you try it, a report would be welcome.
+**3. Keep Secure Boot and use `ryzen_smu`.** The `ryzen-smu-dkms` package
+ships the `ryzen_smu` module as source. DKMS compiles it for every installed
+kernel, now and after each kernel update, and signs it. A signed module loads
+under lockdown, RyzenAdj picks it over `/dev/mem`, and the daemon reports
+`smu=ok` with Secure Boot left on. Nothing else in this project changes.
+
+What is verified, and what is not: CI builds the package, installs it, and
+has DKMS compile the module against the kernels Ubuntu 24.04 and 26.04 ship;
+it also compiles against the 24.04 HWE kernel, and on Ubuntu the module comes
+out signed with the machine owner key. No machine here has yet loaded it and
+written SMU limits with Secure Boot on. If you do, a
+[Hardware Report](https://github.com/matteopasseri407/hp-elitebook-845-g8-ryzen-tuning/issues/new?template=hardware-report.md)
+saying so would be welcome.
+
+Install it before, or alongside, the main package:
+
+```bash
+sudo apt install ./ryzen-smu-dkms_*_all.deb    # pulls in dkms
+```
+
+On Ubuntu, DKMS signs with the machine owner key (MOK) that `shim-signed`
+keeps in `/var/lib/shim-signed/mok/`. The firmware trusts it only once it is
+enrolled, which takes one reboot:
+
+```bash
+mokutil --test-key /var/lib/shim-signed/mok/MOK.der
+# "... is already enrolled": nothing to do.
+# Otherwise:
+sudo mokutil --import /var/lib/shim-signed/mok/MOK.der   # pick a one-time password
+sudo reboot
+# The blue MOK manager appears: Enroll MOK, Continue, Yes, the password, Reboot.
+```
+
+On Debian, DKMS generates its own key instead; enroll
+`/var/lib/dkms/mok.pub` the same way.
+
+After the reboot:
+
+```bash
+cat /sys/kernel/ryzen_smu_drv/drv_version    # 0.1.7 or later
+sudo systemctl restart elitebook-thermal-profile.service
+grep smu= /run/elitebook-thermal-profile/current    # want: smu=ok
+```
+
+The module is loaded at boot through `/usr/lib/modules-load.d/ryzen_smu.conf`.
+With it loaded, the source installer no longer warns about lockdown.
+Removing the package removes the module from every kernel, and RyzenAdj goes
+back to `/dev/mem`.
 
 ## Install from the .deb packages
 
@@ -94,6 +136,7 @@ Download both packages from the
 
 - `elitebook-thermal-profile_*_all.deb` — architecture independent, so the same
   file works on any Ubuntu or Debian release.
+- `ryzen-smu-dkms_*_all.deb` — only with Secure Boot on; see option 3 above.
 - `ryzenadj_*ubuntu24.04_amd64.deb` or `ryzenadj_*ubuntu26.04_amd64.deb` — pick
   the one matching your release. RyzenAdj is compiled, so the binary is tied to
   the release it was built on. The package version uses a tilde

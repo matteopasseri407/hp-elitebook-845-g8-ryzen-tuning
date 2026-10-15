@@ -12,8 +12,8 @@ Stock firmware allows sustained temperatures around 100 °C under normal develop
 Pure Python 3 standard library backend (`/usr/local/sbin/elitebook-*`), zero pip dependencies, typed with `mypy --strict`, atomic state updates, and an optional GNOME Shell top panel indicator. The indicator switches profiles over D-Bus with polkit, so the person at the laptop needs no password; one daemon remains the only process that writes power settings.
 
 > [!WARNING]
-> **Secure Boot must be disabled for full SMU control.**
-> Secure Boot activates kernel lockdown, which blocks `/dev/mem` writes. Check with `cat /sys/kernel/security/lockdown` (must read `[none]`). Without this, the stack degrades to sysfs frequency and EPP controls.
+> **Full SMU control needs Secure Boot off, or the signed `ryzen_smu` module.**
+> Secure Boot activates kernel lockdown, which blocks the `/dev/mem` writes RyzenAdj uses by default. Check with `cat /sys/kernel/security/lockdown` (`[none]` means no lockdown). With lockdown on, either install the `ryzen-smu-dkms` package, which DKMS builds and signs ([docs/ubuntu.md](docs/ubuntu.md#before-you-start-secure-boot), not yet tested on hardware), or accept that the stack degrades to sysfs frequency and EPP controls.
 
 ---
 

@@ -63,6 +63,8 @@ jobs:
         run: tests/test-version-consistency.sh
       - name: Run thermal report tests
         run: tests/test-thermal-report.sh
+      - name: Run installer ryzen_smu tests
+        run: tests/test-installer-ryzen-smu.sh
 
   ruff:
     name: Ruff (Python)

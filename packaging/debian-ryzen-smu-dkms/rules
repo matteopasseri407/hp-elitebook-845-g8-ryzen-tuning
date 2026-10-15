@@ -1,0 +1,32 @@
+#!/usr/bin/make -f
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Ships the ryzen_smu module source for DKMS, which compiles and signs it on
+# the user's machine for every installed kernel. Nothing is compiled here.
+
+export DH_VERBOSE = 1
+
+# The DKMS version: the upstream part of the package version.
+VERSION := $(shell dpkg-parsechangelog -SVersion | sed -e 's/-[^-]*$$//')
+SRCDIR = debian/ryzen-smu-dkms/usr/src/ryzen_smu-$(VERSION)
+
+%:
+	dh $@
+
+# Upstream's Makefile builds against the running kernel's headers; the
+# package build must not.
+override_dh_auto_configure override_dh_auto_build override_dh_auto_test:
+
+override_dh_auto_clean:
+	rm -f *.o *.ko *.mod *.mod.c *.mod.o modules.order Module.symvers .*.cmd
+
+override_dh_auto_install:
+	install -d $(SRCDIR)
+	install -m 0644 Makefile drv.c smu.c smu.h $(SRCDIR)/
+	install -D -m 0644 debian/ryzen_smu.modules-load.conf \
+		debian/ryzen-smu-dkms/usr/lib/modules-load.d/ryzen_smu.conf
+
+# Installs debian/ryzen-smu-dkms.dkms as dkms.conf with this version, and adds
+# the dkms dependency and the maintainer script snippets.
+override_dh_dkms:
+	dh_dkms -V $(VERSION)

@@ -1,0 +1,11 @@
+# Upstream's dkms.conf, with the placeholders its Makefile fills in resolved
+# here: dh_dkms sets the version, and the extra compiler flags are empty.
+# CLEAN names the target kernel too, so it does not need headers for the
+# running kernel when DKMS builds for a newly installed one.
+PACKAGE_NAME="ryzen_smu"
+PACKAGE_VERSION="#MODULE_VERSION#"
+BUILT_MODULE_NAME[0]="ryzen_smu"
+DEST_MODULE_LOCATION[0]="/kernel/drivers/ryzen_smu"
+MAKE[0]="make TARGET=${kernelver}"
+CLEAN="make TARGET=${kernelver} clean"
+AUTOINSTALL="yes"

@@ -65,6 +65,8 @@ Without it, only EPP, boost, and CPU frequency controls apply.
 
 Secure Boot puts the kernel in lockdown, which blocks the SMU writes this
 package is built around. Check with: cat /sys/kernel/security/lockdown
+To keep Secure Boot on, install the ryzen-smu-dkms package from the same
+release; see docs/ubuntu.md.
 EOF
 fi
 

@@ -292,6 +292,10 @@ Interfaccia grafica integrata nel pannello superiore di GNOME Shell (`elitebook-
 - [`profileSwitcher.js`](gnome-extension/elitebook-thermal-profile@matteopasseri.github.io/profileSwitcher.js): usa solo Gio e GLib, così gira anche sotto `gjs` nei test.
   - `switchProfile(profile, {pkexecArgv, bus})`: chiama `SetProfile` sul front end D-Bus permettendo a polkit di chiedere una password quando serve. Una risposta del front end (errore sotto `...Error.`) è definitiva. Qualsiasi altro errore (servizio assente, versione vecchia, timeout) porta a `pkexec`, come prima del front end.
 
+## 4b. Modulo `ryzen_smu` per Secure Boot (`packaging/debian-ryzen-smu-dkms/`)
+
+Pacchetto `ryzen-smu-dkms`, costruito in CI dal sorgente del fork mantenuto (`amkillam/ryzen_smu`) fissato per commit. Contiene solo il sorgente del modulo: DKMS lo compila e lo firma sulla macchina dell'utente per ogni kernel installato (su Ubuntu con la chiave MOK di `shim-signed`). `modules-load.d` lo carica all'avvio. RyzenAdj 0.17 usa il modulo al posto di `/dev/mem` quando trova una versione compatibile (0.1.x con x ≥ 6), quindi con Secure Boot attivo il daemon scrive i limiti SMU senza modifiche al codice. L'installer da sorgente salta l'avviso di lockdown quando il modulo è caricato (`ryzen_smu_module_ready`).
+
 ## 5. Contratti File di Stato (`/run/elitebook-thermal-profile/`)
 
 Il daemon è l'unico scrittore delle impostazioni, quindi quasi tutti i file di stato sono suoi. I nomi `idle-watcher` e `steam-game-watcher` (valore del campo `source`) sono rimasti per compatibilità con l'estensione GNOME.
@@ -318,7 +322,7 @@ Il daemon è l'unico scrittore delle impostazioni, quindi quasi tutti i file di 
   - `tests/test_hibernate_preflight.py`: verifica validazione file di configurazione btrfs.
   - `tests/test_dbus_frontend.py`: il front end D-Bus. Le parti pure girano ovunque; i test end-to-end avviano un bus privato, un polkit finto (`tests/fake_polkit.py`), il daemon vero su fixture sysfs e il front end vero, e cambiano profilo con il `profileSwitcher.js` vero sotto `gjs` (`tests/gjs_switch_profile.js`). Servono root, PyGObject, `dbus-daemon` e `gjs`.
 - **Integrazione di sistema (`tests/*.sh`):**
-  - `test-platform-detection.sh`, `test-hardware-guard.sh`, `test-profile-config.sh`, `test-smu-fallback.sh`, `test-thermal-report.sh`, `test-version-consistency.sh`, `verify-systemd-units.sh`, `check-systemd-security.sh`, `check-no-local-paths.sh`.
+  - `test-platform-detection.sh`, `test-hardware-guard.sh`, `test-profile-config.sh`, `test-smu-fallback.sh`, `test-thermal-report.sh`, `test-installer-ryzen-smu.sh`, `test-version-consistency.sh`, `verify-systemd-units.sh`, `check-systemd-security.sh`, `check-no-local-paths.sh`.
 - **Qualità e Tipizzazione:**
   - `mypy --strict --scripts-are-modules`
   - `ruff check src tests`
