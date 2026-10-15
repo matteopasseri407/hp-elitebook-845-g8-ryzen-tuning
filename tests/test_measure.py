@@ -348,23 +348,44 @@ def test_too_few_counter_steps_give_no_cross_check() -> None:
     assert result["energy_counter"]["agrees"] is None
 
 
-def test_phases_are_measured_apart() -> None:
+def test_phases_count_only_fresh_readings() -> None:
     def phase(t: float) -> str:
-        return "battery (auto), idle soft" if t < 100 else "battery (auto), idle deep"
+        if t < 240:
+            return "battery (auto), idle deep"
+        if t < 274:
+            return "battery (auto), idle soft"
+        return "battery (auto), idle none"
 
     def power(t: float) -> float:
-        return 7.2 if t < 100 else 6.6
+        # Firmware refreshes every 60 s: 6.9, 7.0, 6.8 W during deep idle,
+        # then nothing fresh before the run ends.
+        return {0: 7.5, 1: 6.9, 2: 7.0, 3: 6.8}[min(int(t // 60), 3)]
 
-    result = cli.summarize(_samples(300, power, _stepped(40.0, 6.8), phase), 300.0)
+    result = cli.summarize(_samples(300, power, _stepped(40.0, 6.9), phase), 300.0)
     assert result["changed_during"] is True
-    deep, soft = result["phases"]
-    assert deep == {
-        "phase": "battery (auto), idle deep",
-        "seconds": 200.0,
-        "power_w": 6.6,
-    }
-    assert soft == {
-        "phase": "battery (auto), idle soft",
-        "seconds": 100.0,
-        "power_w": 7.2,
-    }
+    deep, soft, none = result["phases"]
+    assert deep["phase"] == "battery (auto), idle deep"
+    assert (deep["seconds"], deep["readings"]) == (240.0, 3)
+    # The 7.5 W the run started with is minutes old and does not count.
+    assert deep["power_w"] == pytest.approx(6.9)
+    assert deep["energy_w"] == pytest.approx(6.9, rel=0.1)
+    assert (soft["readings"], soft["power_w"]) == (0, None)
+    assert (none["seconds"], none["readings"], none["power_w"]) == (26.0, 0, None)
+
+
+def test_phase_report_says_too_few_readings(capsys: pytest.CaptureFixture[str]) -> None:
+    def phase(t: float) -> str:
+        return "battery (auto), idle soft" if t < 30 else "battery (auto), idle deep"
+
+    def power(t: float) -> float:
+        return 7.0 + 0.1 * (int(t // 20) % 2)
+
+    result = cli.summarize(_samples(300, power, _stepped(40.0, 7.0), phase), 300.0)
+    result.update(
+        ended="complete",
+        runtime={"full_h": None, "remaining_h": None},
+    )
+    cli.print_measurement(result)
+    out = capsys.readouterr().out
+    assert "idle soft" in out and "too few readings (1)" in out
+    assert "idle deep" in out and "from 14 readings" in out

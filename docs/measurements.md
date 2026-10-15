@@ -124,11 +124,11 @@ and idle stage in force. `--json` prints the same as one JSON object.
 
 What the first runs on the 845 G8 taught, and how the report handles it:
 
-- **The firmware refreshes the power figure slowly**, sometimes not at all for
-  a whole minute (one run read 6.76 W in all 31 samples). The report says how
-  often the figure changed, and warns when it stood still for 20 s or half the
-  run: the average then rests on few real readings. Prefer runs of 5 minutes
-  or more.
+- **The firmware refreshes the power figure slowly**: about every 150 s on the
+  845 G8, so a 5 minute run holds two real readings (one run read 6.76 W in all
+  31 samples). The report says how often the figure changed, and warns when it
+  stood still for 20 s or half the run: the average then rests on few real
+  readings. To compare settings, run 20 to 30 minutes.
 - **The stored energy counter moves in steps of about 0.1 Wh**, so the fall
   between start and end is off by up to a step at each end: on the first
   runs it gave 4.1, 14.4 and 3.6 W against 7.2, 6.6 and 6.8 W read directly.
@@ -139,10 +139,14 @@ What the first runs on the 845 G8 taught, and how the report handles it:
   appears only on longer runs. The direct reading is the figure to use.
 - **The idle overlay comes and goes while you measure.** Every sample records
   the profile and idle stage in force, and when they change the report gives
-  the time spent and the average draw in each, so soft and deep idle can be
-  compared from one long run without stopping the service. The power figure
-  lags a stage change by up to one firmware refresh, so short phases are
-  rough.
+  the time spent in each and the average of the fresh readings that arrived
+  during it: a value carried over from before does not count, and a phase
+  with fewer than two fresh readings says "too few readings" instead of a
+  figure. Where the energy counter stepped at least three times within a
+  phase it adds that rate too; the counter steps about every 50 s at 7 W, so
+  it fills in sooner than the power figure. A reading still reflects the
+  firmware's last averaging window, which can reach back into the phase
+  before, so short phases stay rough.
 
 To compare two settings, keep the workload the same: same apps open, same
 screen brightness, Wi-Fi in the same state, and let the machine settle a

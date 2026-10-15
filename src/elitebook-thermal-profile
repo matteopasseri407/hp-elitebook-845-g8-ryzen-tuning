@@ -369,6 +369,8 @@ STALE_SHARE = 0.5
 # The energy counter cross-check agrees when it lands this close to the
 # direct reading.
 AGREE_SHARE = 0.25
+# A phase needs this many fresh power readings for an average of its own.
+MIN_PHASE_READINGS = 2
 
 
 def _phase() -> str:
@@ -396,7 +398,26 @@ def _power_updates(samples: list[Sample], elapsed: float) -> tuple[int, float]:
     return changes, round(longest, 1)
 
 
-def _energy_rate(samples: list[Sample]) -> dict[str, typing.Any]:
+class Change(typing.NamedTuple):
+    t: float
+    value: float
+    phase: str
+
+
+def _changes(samples: list[Sample], field: str) -> list[Change]:
+    """The samples where ``field`` took a new value: fresh firmware readings.
+
+    The first sample is not one: its value may be minutes old.
+    """
+    seen = [s for s in samples if getattr(s, field) is not None]
+    return [
+        Change(s.t, getattr(s, field), s.phase)
+        for previous, s in zip(seen, seen[1:])
+        if getattr(s, field) != getattr(previous, field)
+    ]
+
+
+def _energy_rate(edges: list[Change]) -> dict[str, typing.Any]:
     """The draw implied by the battery's stored energy counter.
 
     The counter moves in steps (about 0.1 Wh on the HP tested), so the fall
@@ -405,22 +426,16 @@ def _energy_rate(samples: list[Sample]) -> dict[str, typing.Any]:
     from the first change seen to the last, removes that error and leaves
     only the sampling interval at each end.
     """
-    points = [(s.t, s.energy_wh) for s in samples if s.energy_wh is not None]
-    edges = [
-        (t, energy)
-        for (_, previous), (t, energy) in zip(points, points[1:])
-        if energy != previous
-    ]
     result: dict[str, typing.Any] = {"steps": len(edges), "rate_w": None}
     if len(edges) < 2:
         return result
-    (t_first, e_first), (t_last, e_last) = edges[0], edges[-1]
-    if t_last <= t_first or e_last >= e_first:
+    first, last = edges[0], edges[-1]
+    if last.t <= first.t or last.value >= first.value:
         return result
-    steps = sorted(abs(b - a) for (_, a), (_, b) in zip(edges, edges[1:]))
+    steps = sorted(abs(b.value - a.value) for a, b in zip(edges, edges[1:]))
     result.update(
-        rate_w=round((e_first - e_last) * 3600 / (t_last - t_first), 2),
-        window_s=round(t_last - t_first, 1),
+        rate_w=round((first.value - last.value) * 3600 / (last.t - first.t), 2),
+        window_s=round(last.t - first.t, 1),
         step_wh=round(steps[len(steps) // 2], 3),
     )
     return result
@@ -434,7 +449,9 @@ def summarize(samples: list[Sample], elapsed: float) -> dict[str, typing.Any]:
     stale = len(power) >= 5 and (
         changes == 0 or still >= max(STALE_MIN_S, STALE_SHARE * elapsed)
     )
-    energy = _energy_rate(samples)
+    energy_edges = _changes(samples, "energy_wh")
+    readings = _changes(samples, "power_w")
+    energy = _energy_rate(energy_edges)
     if energy["rate_w"] is not None and stats and stats["avg"] > 0:
         gap = abs(energy["rate_w"] - stats["avg"]) / stats["avg"]
         energy["differs_by"] = round(gap, 2)
@@ -442,23 +459,30 @@ def summarize(samples: list[Sample], elapsed: float) -> dict[str, typing.Any]:
     else:
         energy["agrees"] = None
 
-    phases: dict[str, dict[str, typing.Any]] = {}
+    # Within a phase only fresh readings count: a value carried over from
+    # the phase before, or one the firmware has not refreshed, says nothing
+    # about this one. Fewer than MIN_PHASE_READINGS give no figure at all.
+    seconds: dict[str, float] = {}
     for index, sample in enumerate(samples):
         following = samples[index + 1].t if index + 1 < len(samples) else elapsed
-        phase = phases.setdefault(sample.phase, {"seconds": 0.0, "power": []})
-        phase["seconds"] += max(0.0, following - sample.t)
-        if sample.power_w is not None:
-            phase["power"].append(sample.power_w)
-    by_phase = [
-        {
-            "phase": name,
-            "seconds": round(values["seconds"], 1),
-            "power_w": None
-            if not values["power"]
-            else round(sum(values["power"]) / len(values["power"]), 2),
-        }
-        for name, values in sorted(phases.items(), key=lambda kv: -kv[1]["seconds"])
-    ]
+        seconds[sample.phase] = seconds.get(sample.phase, 0.0) + max(
+            0.0, following - sample.t
+        )
+    by_phase = []
+    for name in sorted(seconds, key=lambda n: -seconds[n]):
+        fresh = [r.value for r in readings if r.phase == name]
+        enough = len(fresh) >= MIN_PHASE_READINGS
+        by_phase.append(
+            {
+                "phase": name,
+                "seconds": round(seconds[name], 1),
+                "readings": len(fresh),
+                "power_w": round(sum(fresh) / len(fresh), 2) if enough else None,
+                "energy_w": _energy_rate([e for e in energy_edges if e.phase == name])[
+                    "rate_w"
+                ],
+            }
+        )
     return {
         "seconds": round(elapsed, 1),
         "samples": len(power),
@@ -578,10 +602,19 @@ def print_measurement(result: dict[str, typing.Any]) -> None:
             "direct reading; trust neither to better than that"
         )
     if result["changed_during"]:
-        print("  By phase (the profile or idle stage changed while measuring):")
+        print(
+            "  By phase (the profile or idle stage changed while measuring; only "
+            "fresh readings count):"
+        )
         for phase in result["phases"]:
-            watts = "-" if phase["power_w"] is None else f"{phase['power_w']:.1f} W"
-            print(f"    {phase['phase']:<40} {phase['seconds']:>5.0f} s  {watts}")
+            count = phase["readings"]
+            if phase["power_w"] is None:
+                watts = f"too few readings ({count})"
+            else:
+                watts = f"{phase['power_w']:.1f} W from {count} readings"
+            if phase["energy_w"] is not None:
+                watts += f", energy counter {phase['energy_w']:.1f} W"
+            print(f"    {phase['phase']:<36} {phase['seconds']:>5.0f} s  {watts}")
     else:
         print(f"  Phase:        {result['phases'][0]['phase']}")
     temp = result["cpu_temp_c"]
