@@ -183,7 +183,32 @@ policy so the laptop does not stay in a half-applied power state.
 
 ## GNOME Button Asks For A Password
 
-That is expected. The extension uses `pkexec` to run the profile switcher as root. This repository does not install a passwordless polkit rule by default.
+The indicator switches profiles through a small D-Bus front end,
+`elitebook-thermal-profile-dbus`. polkit lets whoever sits at the active local
+session do that without a password, the same way GNOME's own power mode
+works. When the front end cannot answer, the indicator falls back to `pkexec`,
+which asks for an administrator password every time. A password prompt
+therefore means the front end was not reached. Check, in order:
+
+```bash
+# PyGObject for the distribution's Python (python3-gi on Ubuntu/Debian,
+# python3-gobject-base on Fedora)
+/usr/bin/python3 -c 'import gi'
+
+# The polkit action is installed and allows the active session
+pkaction --action-id io.github.matteopasseri.EliteBookThermalProfile1.set-profile --verbose
+
+# The front end starts and answers (this switches to auto)
+gdbus call --system --dest io.github.matteopasseri.EliteBookThermalProfile1 \
+  --object-path /io/github/matteopasseri/EliteBookThermalProfile1 \
+  --method io.github.matteopasseri.EliteBookThermalProfile1.SetProfile auto
+journalctl -u elitebook-thermal-profile-dbus.service -n 20
+```
+
+If you installed or upgraded from source while logged in, log out and back in
+once so GNOME Shell loads the new indicator code. A prompt from a remote or
+inactive session (SSH, a second user switched away) is expected: polkit only
+waives the password for the active local session.
 
 ## Steam Game Does Not Switch To Gaming
 

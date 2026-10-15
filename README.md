@@ -9,7 +9,7 @@ Linux thermal management and power tuning for HP EliteBook and ProBook laptops p
 
 Stock firmware allows sustained temperatures around 100 °C under normal development loads, relying on thermal throttling. Rather than disabling boost or hard-capping clocks, this stack tunes sustained SMU power limits (via RyzenAdj) and energy preferences (AMD P-State EPP) so bursts remain fast while fans stay quiet.
 
-Pure Python 3 standard library backend (`/usr/local/sbin/elitebook-*`), zero pip dependencies, typed with `mypy --strict`, atomic state updates, and an optional GNOME Shell top panel indicator.
+Pure Python 3 standard library backend (`/usr/local/sbin/elitebook-*`), zero pip dependencies, typed with `mypy --strict`, atomic state updates, and an optional GNOME Shell top panel indicator. The indicator switches profiles over D-Bus with polkit, so the person at the laptop needs no password; one daemon remains the only process that writes power settings.
 
 > [!WARNING]
 > **Secure Boot must be disabled for full SMU control.**
@@ -103,7 +103,7 @@ Detailed documentation is organized in `docs/`:
 - [CODEBASE_MAP.md](CODEBASE_MAP.md): Full symbol map, architecture diagram, state file contracts, and the control socket.
 - [docs/fedora.md](docs/fedora.md): Fedora RPM packaging, tuned coexistence, and GNOME power mode masking.
 - [docs/ubuntu.md](docs/ubuntu.md): Ubuntu and Debian installation, secure boot configuration, and systemd setup.
-- [docs/configuration.md](docs/configuration.md): Overriding limits via `/etc/elitebook-thermal-profile/profiles.conf`.
+- [docs/configuration.md](docs/configuration.md): Overriding limits via `/etc/elitebook-thermal-profile/profiles.conf`, and polkit rules for who may switch profiles.
 - [docs/troubleshooting.md](docs/troubleshooting.md): Diagnosing RyzenAdj errors, STT firmware overrides, and fallback states.
 - [docs/measurements.md](docs/measurements.md): Thermal benchmarks, fan noise comparisons, and power curves.
 - [docs/hibernate.md](docs/hibernate.md): Opt-in btrfs swapfile hibernate preflight checks.

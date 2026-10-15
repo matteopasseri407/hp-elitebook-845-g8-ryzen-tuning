@@ -6,6 +6,7 @@ Summary:        Thermal and power profiles for HP AMD Cezanne laptops
 %global upstream_url https://github.com/matteopasseri407/hp-elitebook-845-g8-ryzen-tuning
 %global repo_dir hp-elitebook-845-g8-ryzen-tuning-%{version}
 %global extension_uuid elitebook-thermal-profile@matteopasseri.github.io
+%global dbus_name io.github.matteopasseri.EliteBookThermalProfile1
 
 License:        GPL-3.0-or-later
 URL:            %{upstream_url}
@@ -20,6 +21,9 @@ Requires:       systemd
 Requires:       tuned
 Requires:       util-linux-core
 Recommends:     ryzenadj >= 0.17.0
+# The D-Bus front end; without it the GNOME indicator falls back to pkexec.
+Recommends:     python3-gobject-base
+Recommends:     polkit
 Suggests:       gnome-shell-extension-elitebook-thermal-profile
 
 Requires(post):   systemd
@@ -33,7 +37,9 @@ User-space thermal and power profile integration for selected HP EliteBook and
 ProBook AMD Cezanne laptops on Linux. It combines AMD P-State EPP, CPU
 frequency policy, a systemd service, and RyzenAdj-driven SMU limits. A single
 daemon handles AC/battery, idle, Steam and resume, and an update guard timer
-keeps conflicting power backends masked.
+keeps conflicting power backends masked. An optional D-Bus front end, started
+on demand, lets the active desktop session switch profiles through polkit
+without a password.
 
 Full SMU control requires a RyzenAdj binary. Without RyzenAdj, the profile
 stack degrades to kernel EPP, boost, and frequency controls where possible.
@@ -43,6 +49,7 @@ Summary:        GNOME Shell indicator for EliteBook thermal profiles
 Requires:       %{name} = %{version}-%{release}
 Requires:       gnome-shell >= 45
 Requires:       polkit
+Requires:       python3-gobject-base
 
 %description -n gnome-shell-extension-elitebook-thermal-profile
 GNOME Shell panel indicator for switching the EliteBook thermal profile between
@@ -62,7 +69,8 @@ python3 -m py_compile \
   src/elitebook_profiles.py \
   src/elitebook_engine.py \
   src/elitebook-power-guard \
-  src/elitebook-hibernate-preflight
+  src/elitebook-hibernate-preflight \
+  src/elitebook-thermal-profile-dbus
 
 %install
 install -Dm0755 src/elitebook-thermal-profile \
@@ -77,6 +85,8 @@ install -Dm0755 src/elitebook-power-guard \
   %{buildroot}%{_bindir}/elitebook-power-guard
 install -Dm0755 src/elitebook-hibernate-preflight \
   %{buildroot}%{_bindir}/elitebook-hibernate-preflight
+install -Dm0755 src/elitebook-thermal-profile-dbus \
+  %{buildroot}%{_libexecdir}/elitebook-thermal-profile-dbus
 
 install -Dm0644 systemd/elitebook-thermal-profile.service \
   %{buildroot}%{_unitdir}/elitebook-thermal-profile.service
@@ -84,6 +94,17 @@ install -Dm0644 systemd/elitebook-power-guard.service \
   %{buildroot}%{_unitdir}/elitebook-power-guard.service
 install -Dm0644 systemd/elitebook-power-guard.timer \
   %{buildroot}%{_unitdir}/elitebook-power-guard.timer
+install -Dm0644 systemd/elitebook-thermal-profile-dbus.service \
+  %{buildroot}%{_unitdir}/elitebook-thermal-profile-dbus.service
+
+# D-Bus front end: policy, on-demand activation, and the polkit action that
+# lets the active session switch profiles without a password.
+install -Dm0644 dbus/%{dbus_name}.conf \
+  %{buildroot}%{_datadir}/dbus-1/system.d/%{dbus_name}.conf
+install -Dm0644 dbus/%{dbus_name}.service \
+  %{buildroot}%{_datadir}/dbus-1/system-services/%{dbus_name}.service
+install -Dm0644 polkit/%{dbus_name}.policy \
+  %{buildroot}%{_datadir}/polkit-1/actions/%{dbus_name}.policy
 
 install -d %{buildroot}%{_datadir}/gnome-shell/extensions
 cp -a gnome-extension/%{extension_uuid} %{buildroot}%{_datadir}/gnome-shell/extensions/
@@ -107,6 +128,7 @@ install -Dm0644 config/profiles.conf.example \
 
 sed -i \
   -e 's#/usr/local/sbin#%{_bindir}#g' \
+  -e 's#/usr/local/libexec#%{_libexecdir}#g' \
   %{buildroot}%{_unitdir}/elitebook-*.service \
   %{buildroot}%{_datadir}/%{name}/examples/systemd-hibernate.service.d/10-elitebook-preflight.conf \
   %{buildroot}%{_datadir}/%{name}/examples/systemd-suspend-then-hibernate.service.d/10-elitebook-preflight.conf
@@ -145,10 +167,10 @@ The btrfs swapfile hibernate preflight is inactive by default; see
 EOF
 
 %preun
-%systemd_preun elitebook-thermal-profile.service elitebook-power-guard.timer
+%systemd_preun elitebook-thermal-profile.service elitebook-power-guard.timer elitebook-thermal-profile-dbus.service
 
 %postun
-%systemd_postun_with_restart elitebook-thermal-profile.service elitebook-power-guard.timer
+%systemd_postun_with_restart elitebook-thermal-profile.service elitebook-power-guard.timer elitebook-thermal-profile-dbus.service
 if command -v udevadm >/dev/null 2>&1; then
   udevadm control --reload-rules >/dev/null 2>&1 || :
 fi
@@ -165,7 +187,12 @@ fi
 %{_prefix}/lib/elitebook-thermal-profile/elitebook_engine.py
 %{_bindir}/elitebook-power-guard
 %{_bindir}/elitebook-hibernate-preflight
+%{_libexecdir}/elitebook-thermal-profile-dbus
 %{_unitdir}/elitebook-thermal-profile.service
+%{_unitdir}/elitebook-thermal-profile-dbus.service
+%{_datadir}/dbus-1/system.d/%{dbus_name}.conf
+%{_datadir}/dbus-1/system-services/%{dbus_name}.service
+%{_datadir}/polkit-1/actions/%{dbus_name}.policy
 %{_unitdir}/elitebook-power-guard.service
 %{_unitdir}/elitebook-power-guard.timer
 %{_datadir}/%{name}/

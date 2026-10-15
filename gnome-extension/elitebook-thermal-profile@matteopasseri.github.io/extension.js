@@ -10,6 +10,8 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 
+import {switchProfile} from './profileSwitcher.js';
+
 const PROFILE_SCRIPT =
     GLib.file_test('/usr/local/sbin/elitebook-thermal-profile', GLib.FileTest.IS_EXECUTABLE)
         ? '/usr/local/sbin/elitebook-thermal-profile'
@@ -281,34 +283,16 @@ class ThermalIndicator extends PanelMenu.Button {
     }
 
     _applyProfile(profile) {
-        try {
-            const proc = Gio.Subprocess.new(
-                ['pkexec', PROFILE_SCRIPT, profile],
-                Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE,
-            );
-
-            proc.communicate_utf8_async(null, null, (_proc, result) => {
-                try {
-                    const [, stdout, stderr] = proc.communicate_utf8_finish(result);
-                    if (proc.get_successful()) {
-                        this._refresh();
-                        Main.notify(
-                            'EliteBook Power',
-                            stdout.trim().split('\n').pop() ?? 'Profile applied.',
-                        );
-                    } else {
-                        Main.notifyError(
-                            'EliteBook Power',
-                            stderr.trim() || 'Profile switch failed.',
-                        );
-                    }
-                } catch (error) {
-                    Main.notifyError('EliteBook Power', error.message);
+        switchProfile(profile, {pkexecArgv: ['pkexec', PROFILE_SCRIPT, profile]})
+            .then(({ok, message}) => {
+                if (ok) {
+                    this._refresh();
+                    Main.notify('EliteBook Power', message || 'Profile applied.');
+                } else {
+                    Main.notifyError('EliteBook Power', message || 'Profile switch failed.');
                 }
-            });
-        } catch (error) {
-            Main.notifyError('EliteBook Power', error.message);
-        }
+            })
+            .catch(error => Main.notifyError('EliteBook Power', error.message));
     }
 
     destroy() {

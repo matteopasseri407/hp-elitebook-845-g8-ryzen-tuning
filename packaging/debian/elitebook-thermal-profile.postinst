@@ -37,6 +37,14 @@ if [ "$1" = "configure" ] && [ -n "$2" ] && dpkg --compare-versions "$2" lt 1.0.
   fi
 fi
 
+# The D-Bus front end is started on demand and then stays up. A copy that
+# is already running keeps the old code until restarted. For a unit with no
+# [Install] section, deb-systemd-invoke restart acts only on a running copy,
+# so nothing starts on a fresh install.
+if [ "$1" = "configure" ] && [ -n "$2" ] && [ -d /run/systemd/system ]; then
+  deb-systemd-invoke restart elitebook-thermal-profile-dbus.service >/dev/null 2>&1 || true
+fi
+
 if [ "$1" = "configure" ]; then
   cat <<'EOF'
 elitebook-thermal-profile installed.

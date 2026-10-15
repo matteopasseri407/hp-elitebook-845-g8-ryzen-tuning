@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+  "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<!--
+  Switching the power profile is as harmless as the power mode in GNOME's
+  quick settings, which power-profiles-daemon allows without a password, so
+  the person at the active local session may do it freely. Anyone else needs
+  an administrator. Override the defaults with a rule in
+  /etc/polkit-1/rules.d/ rather than by editing this file.
+-->
+<policyconfig>
+  <vendor>HP EliteBook thermal profile</vendor>
+  <vendor_url>https://github.com/matteopasseri407/hp-elitebook-845-g8-ryzen-tuning</vendor_url>
+  <action id="io.github.matteopasseri.EliteBookThermalProfile1.set-profile">
+    <description>Change the EliteBook power profile</description>
+    <message>Authentication is required to change the power profile</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>yes</allow_active>
+    </defaults>
+  </action>
+</policyconfig>

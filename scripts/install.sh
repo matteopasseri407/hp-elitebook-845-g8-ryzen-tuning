@@ -25,6 +25,16 @@ KEEP_RYZENADJ=0
 POWER_BACKEND=""
 
 EXTENSION_UUID="elitebook-thermal-profile@matteopasseri.github.io"
+
+# D-Bus front end: lets the GNOME indicator switch profiles through polkit
+# instead of pkexec. Only the policy goes to /etc; D-Bus and polkit read the
+# activation and action files from /usr/share alone, on every bus daemon.
+DBUS_NAME="io.github.matteopasseri.EliteBookThermalProfile1"
+DBUS_FRONT_END="/usr/local/libexec/elitebook-thermal-profile-dbus"
+DBUS_FRONT_END_UNIT="elitebook-thermal-profile-dbus.service"
+DBUS_POLICY="/etc/dbus-1/system.d/${DBUS_NAME}.conf"
+DBUS_ACTIVATION="/usr/share/dbus-1/system-services/${DBUS_NAME}.service"
+POLKIT_ACTION_FILE="/usr/share/polkit-1/actions/${DBUS_NAME}.policy"
 LEGACY_EXTENSION_UUID="elitebook-thermal-profile@matteopasseri.local"
 LEGACY_EXTENSION_DETECTED=0
 
@@ -70,6 +80,8 @@ Options:
 Installs:
   /usr/local/sbin/elitebook-thermal-profile (single daemon and CLI)
   /usr/local/sbin/elitebook_common.py, elitebook_profiles.py, elitebook_engine.py
+  /usr/local/libexec/elitebook-thermal-profile-dbus (D-Bus front end, started
+    on demand, with its D-Bus policy and polkit action)
   /etc/systemd/system/elitebook-thermal-profile.service
   low-battery battery-saver automation at 20%
   idle overlay, unless --without-idle-watcher
@@ -147,6 +159,8 @@ pkg_name() {
     debian:c++) echo "g++" ;;
     fedora:libpci) echo "pciutils-devel" ;;
     debian:libpci) echo "libpci-dev" ;;
+    fedora:python3-gi) echo "python3-gobject-base" ;;
+    debian:python3-gi) echo "python3-gi" ;;
     *:*) echo "$logical" ;;
   esac
 }
@@ -288,7 +302,7 @@ print_platform() {
 
   printf 'distro_family=%s\n' "$DISTRO_FAMILY"
   printf 'package_manager=%s\n' "$(package_manager_hint)"
-  for logical in flock pkexec c++ libpci; do
+  for logical in flock pkexec c++ libpci python3-gi; do
     printf 'pkg.%s=%s\n' "$logical" "$(pkg_name "$logical")"
   done
   printf 'tuned_required=%s\n' "$([[ "$DISTRO_FAMILY" = "fedora" ]] && echo yes || echo no)"
@@ -384,6 +398,44 @@ EOF
   esac
 }
 
+# The D-Bus front end runs under the distribution's Python with PyGObject.
+have_python_gi() {
+  /usr/bin/python3 -c 'import gi; gi.require_version("Gio", "2.0"); from gi.repository import Gio' >/dev/null 2>&1
+}
+
+# D-Bus rereads its policy files only when told to; polkit notices new
+# actions by itself.
+reload_dbus_config() {
+  busctl call org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus ReloadConfig >/dev/null 2>&1 || true
+}
+
+install_dbus_front_end() {
+  # /usr/share is read-only on image-based systems such as Fedora
+  # Silverblue. The front end is optional, so skip it there rather than
+  # failing the whole install.
+  if ! install -D -m 0644 "$REPO_DIR/dbus/${DBUS_NAME}.service" "$DBUS_ACTIVATION" 2>/dev/null ||
+    ! install -D -m 0644 "$REPO_DIR/polkit/${DBUS_NAME}.policy" "$POLKIT_ACTION_FILE" 2>/dev/null; then
+    remove_dbus_front_end
+    warn "/usr/share is not writable here, so the D-Bus front end was skipped; the GNOME indicator keeps asking for a password through pkexec"
+    return 0
+  fi
+  install -D -m 0755 "$REPO_DIR/src/elitebook-thermal-profile-dbus" "$DBUS_FRONT_END"
+  install -D -m 0644 "$REPO_DIR/systemd/$DBUS_FRONT_END_UNIT" "/etc/systemd/system/$DBUS_FRONT_END_UNIT"
+  install -D -m 0644 "$REPO_DIR/dbus/${DBUS_NAME}.conf" "$DBUS_POLICY"
+  if ! have_python_gi; then
+    warn "PyGObject ($(pkg_name python3-gi)) is missing: the GNOME indicator will ask for a password through pkexec until it is installed"
+  fi
+}
+
+remove_dbus_front_end() {
+  systemctl stop "$DBUS_FRONT_END_UNIT" >/dev/null 2>&1 || true
+  rm -f "/etc/systemd/system/$DBUS_FRONT_END_UNIT"
+  rm -f "$DBUS_FRONT_END"
+  rm -f "$DBUS_POLICY"
+  rm -f "$DBUS_ACTIVATION"
+  rm -f "$POLKIT_ACTION_FILE"
+}
+
 check_required_tools() {
   local missing_pkgs=()
 
@@ -400,6 +452,9 @@ check_required_tools() {
 
   if [[ "$WITH_GNOME_EXTENSION" -eq 1 ]]; then
     command -v pkexec >/dev/null 2>&1 || missing_pkgs+=("$(pkg_name pkexec)")
+    # The indicator also works through pkexec alone, but asks for a password
+    # every time; the D-Bus front end that avoids it needs PyGObject.
+    have_python_gi || missing_pkgs+=("$(pkg_name python3-gi)")
   fi
 
   if [[ "$ENABLE_HIBERNATE_PREFLIGHT" -eq 1 ]]; then
@@ -561,6 +616,7 @@ install_profile_files() {
   install -D -m 0644 "$REPO_DIR/src/elitebook_engine.py" /usr/local/sbin/elitebook_engine.py
   install -D -m 0644 "$REPO_DIR/systemd/elitebook-thermal-profile.service" /etc/systemd/system/elitebook-thermal-profile.service
   install_daemon_dropin
+  install_dbus_front_end
 
   # Never overwrite profile overrides the user has already edited.
   if [[ ! -f "$BACKEND_CONF_DIR/profiles.conf" ]]; then
@@ -652,12 +708,17 @@ install_gnome_extension() {
   install -m 0644 "$extension_src/metadata.json" "$extension_dest/metadata.json"
   install -m 0644 "$extension_src/stylesheet.css" "$extension_dest/stylesheet.css"
   install -m 0644 "$extension_src/extension.js" "$extension_dest/extension.js"
+  install -m 0644 "$extension_src/profileSwitcher.js" "$extension_dest/profileSwitcher.js"
   install -m 0644 "$extension_src"/icons/*.svg "$extension_dest/icons/"
   chown -R "$target_user:$target_group" "$extension_dest"
 }
 
 enable_services() {
   systemctl daemon-reload
+  reload_dbus_config
+  # Started on demand, never enabled; a copy already running keeps the old
+  # code until restarted.
+  systemctl try-restart "$DBUS_FRONT_END_UNIT" >/dev/null 2>&1 || true
   systemctl enable elitebook-thermal-profile.service
   systemctl restart elitebook-thermal-profile.service
 
@@ -771,6 +832,7 @@ uninstall_profiles() {
   systemctl disable --now elitebook-thermal-profile.service >/dev/null 2>&1 || true
   systemctl disable --now elitebook-power-guard.timer >/dev/null 2>&1 || true
   systemctl disable --now elitebook-power-guard.service >/dev/null 2>&1 || true
+  remove_dbus_front_end
 
   rm -f /etc/systemd/system/elitebook-thermal-profile.service
   rm -f /etc/systemd/system/elitebook-thermal-profile.service.d/10-installer.conf
@@ -806,6 +868,7 @@ uninstall_profiles() {
 
   systemctl unmask power-profiles-daemon.service tuned-ppd.service >/dev/null 2>&1 || true
   systemctl daemon-reload
+  reload_dbus_config
   udevadm control --reload-rules
   restore_power_backend
 

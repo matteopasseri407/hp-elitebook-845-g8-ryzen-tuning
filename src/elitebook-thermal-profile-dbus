@@ -1,0 +1,365 @@
+#!/usr/bin/python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+"""D-Bus front end for the EliteBook thermal profile daemon.
+
+Lets a desktop session switch profiles without typing a password: polkit
+decides who may (by default anyone at the active local session), and each
+call becomes the same request the command line sends over the daemon's
+root-only control socket. This service writes no setting of its own, so the
+daemon stays the only writer and its control socket stays the one way in.
+
+Nothing depends on this process. The daemon does not know it exists, and the
+GNOME indicator falls back to pkexec when it is missing or fails, so a fault
+here can only cost the password-free path, never profile switching itself.
+
+It is started on demand by D-Bus activation and then stays running: it costs
+no CPU between calls, and exiting on idle would race with the next
+activation. Runs under the distribution's /usr/bin/python3 because it needs
+PyGObject (python3-gi), which is packaged for that interpreter only.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import queue
+import signal
+import socket
+import sys
+import threading
+import typing
+from pathlib import Path
+
+PROG = "elitebook-thermal-profile-dbus"
+
+BUS_NAME = "io.github.matteopasseri.EliteBookThermalProfile1"
+OBJECT_PATH = "/io/github/matteopasseri/EliteBookThermalProfile1"
+INTERFACE = BUS_NAME
+ERROR_PREFIX = f"{BUS_NAME}.Error."
+POLKIT_ACTION = f"{BUS_NAME}.set-profile"
+
+POLKIT_NAME = "org.freedesktop.PolicyKit1"
+POLKIT_PATH = "/org/freedesktop/PolicyKit1/Authority"
+POLKIT_INTERFACE = "org.freedesktop.PolicyKit1.Authority"
+POLKIT_ALLOW_USER_INTERACTION = 1
+# An interactive check waits for someone to type a password.
+POLKIT_TIMEOUT_MS = 5 * 60 * 1000
+
+STATE_DIR = Path(
+    os.environ.get("ELITEBOOK_THERMAL_STATE_DIR", "/run/elitebook-thermal-profile")
+)
+CONTROL_SOCKET = STATE_DIR / "control"
+# The command line waits this long for the daemon too.
+DAEMON_TIMEOUT_S = 30.0
+
+# Kept in step with elitebook_profiles.PROFILE_NAMES by the test suite; this
+# file cannot import that module because it is installed apart from it.
+PROFILES = ("auto", "ac", "performance", "battery", "battery-saver", "gaming", "cool")
+
+SERVICE_DOWN = (
+    "the elitebook-thermal-profile service is not running. Start it with "
+    "'sudo systemctl start elitebook-thermal-profile'."
+)
+
+INTROSPECTION_XML = f"""<node>
+  <interface name="{INTERFACE}">
+    <method name="SetProfile">
+      <arg name="profile" type="s" direction="in"/>
+      <arg name="message" type="s" direction="out"/>
+    </method>
+  </interface>
+</node>
+"""
+
+
+def log(message: str) -> None:
+    print(f"{PROG}: {message}", file=sys.stderr, flush=True)
+
+
+class Refused(Exception):
+    """A call that did not change the profile.
+
+    ``name`` is the last component of the D-Bus error name the caller sees
+    (under ERROR_PREFIX) and ``message`` is meant for a person.
+    """
+
+    def __init__(self, name: str, message: str) -> None:
+        super().__init__(message)
+        self.name = name
+        self.message = message
+
+
+def daemon_request(profile: str) -> dict[str, str]:
+    """The control socket request the command line sends for ``profile``."""
+    if profile not in PROFILES:
+        raise Refused(
+            "InvalidProfile",
+            f"unknown profile '{profile}'; expected one of {', '.join(PROFILES)}",
+        )
+    if profile == "auto":
+        return {"cmd": "auto"}
+    return {"cmd": "set", "profile": profile}
+
+
+def forward(
+    request: dict[str, str],
+    control_socket: Path = CONTROL_SOCKET,
+    timeout: float = DAEMON_TIMEOUT_S,
+) -> str:
+    """Send one request to the daemon and return its message, or raise Refused."""
+    data = b""
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+            sock.settimeout(timeout)
+            sock.connect(str(control_socket))
+            sock.sendall(json.dumps(request).encode() + b"\n")
+            while not data.endswith(b"\n") and len(data) < 65536:
+                chunk = sock.recv(4096)
+                if not chunk:
+                    break
+                data += chunk
+    except (FileNotFoundError, ConnectionRefusedError):
+        raise Refused("ServiceDown", SERVICE_DOWN) from None
+    except OSError as exc:
+        raise Refused("Failed", f"could not talk to the service: {exc}") from None
+    try:
+        reply = json.loads(data.decode())
+    except ValueError:
+        reply = None
+    if not isinstance(reply, dict):
+        raise Refused("Failed", "the service sent an unreadable reply")
+    message = str(reply.get("message", ""))
+    if reply.get("ok") is not True:
+        raise Refused("Refused", message or "the service refused the request")
+    return message
+
+
+class Forwarder:
+    """Passes authorized requests to the daemon one at a time, in order.
+
+    The daemon can take seconds to answer (it runs RyzenAdj), so this runs
+    off the main loop. A single worker keeps two quick clicks applied in the
+    order they were made.
+    """
+
+    def __init__(
+        self,
+        send: typing.Callable[[dict[str, str]], str],
+        deliver: typing.Callable[[typing.Callable[[], None]], None],
+    ) -> None:
+        self._send = send
+        self._deliver = deliver
+        self._queue: queue.Queue[
+            tuple[str, typing.Callable[[str], None], typing.Callable[[Refused], None]]
+        ] = queue.Queue()
+        threading.Thread(target=self._run, name="forwarder", daemon=True).start()
+
+    def submit(
+        self,
+        profile: str,
+        done: typing.Callable[[str], None],
+        failed: typing.Callable[[Refused], None],
+    ) -> None:
+        self._queue.put((profile, done, failed))
+
+    def _run(self) -> None:
+        while True:
+            profile, done, failed = self._queue.get()
+            try:
+                message = self._send(daemon_request(profile))
+            except Refused as exc:
+                refused = exc
+                self._deliver(lambda: failed(refused))
+            except Exception as exc:  # noqa: BLE001 - the caller must get an answer
+                unexpected = Refused("Failed", f"internal error: {exc}")
+                self._deliver(lambda: failed(unexpected))
+            else:
+                self._deliver(lambda: done(message))
+
+
+class Service:
+    """The exported object: authorize with polkit, then hand off to Forwarder."""
+
+    def __init__(
+        self, gio: typing.Any, glib: typing.Any, connection: typing.Any
+    ) -> None:
+        self.gio = gio
+        self.glib = glib
+        self.connection = connection
+        self.forwarder = Forwarder(forward, self._on_main_loop)
+
+    def _on_main_loop(self, func: typing.Callable[[], None]) -> None:
+        def once() -> bool:
+            func()
+            return False
+
+        self.glib.idle_add(once)
+
+    def register(self) -> None:
+        node = self.gio.DBusNodeInfo.new_for_xml(INTROSPECTION_XML)
+        self.connection.register_object(
+            OBJECT_PATH, node.interfaces[0], self._on_call, None, None
+        )
+
+    def _fail(self, invocation: typing.Any, refused: Refused) -> None:
+        invocation.return_dbus_error(ERROR_PREFIX + refused.name, refused.message)
+
+    def _on_call(
+        self,
+        connection: typing.Any,
+        sender: str,
+        path: str,
+        interface: str,
+        method: str,
+        parameters: typing.Any,
+        invocation: typing.Any,
+    ) -> None:
+        if method != "SetProfile":
+            invocation.return_dbus_error(
+                "org.freedesktop.DBus.Error.UnknownMethod", f"no method {method}"
+            )
+            return
+        (profile,) = parameters.unpack()
+        try:
+            daemon_request(profile)
+        except Refused as exc:
+            self._fail(invocation, exc)
+            return
+        flags = invocation.get_message().get_flags()
+        interactive = bool(
+            flags & self.gio.DBusMessageFlags.ALLOW_INTERACTIVE_AUTHORIZATION
+        )
+        self._authorize(sender, interactive, invocation, profile)
+
+    def _authorize(
+        self, sender: str, interactive: bool, invocation: typing.Any, profile: str
+    ) -> None:
+        subject = ("system-bus-name", {"name": self.glib.Variant("s", sender)})
+        flags = POLKIT_ALLOW_USER_INTERACTION if interactive else 0
+        args = self.glib.Variant(
+            "((sa{sv})sa{ss}us)", (subject, POLKIT_ACTION, {}, flags, "")
+        )
+
+        def checked(connection: typing.Any, result: typing.Any) -> None:
+            try:
+                answer(connection, result)
+            except Exception as exc:  # noqa: BLE001 - the caller must get an answer
+                log(f"authorizing {sender} failed: {exc}")
+                self._fail(invocation, Refused("Failed", f"internal error: {exc}"))
+
+        def answer(connection: typing.Any, result: typing.Any) -> None:
+            try:
+                reply = connection.call_finish(result)
+            except self.glib.Error as exc:
+                # Fail closed: no answer from polkit is not a yes.
+                log(f"polkit check for {sender} failed: {exc.message}")
+                self._fail(
+                    invocation,
+                    Refused(
+                        "NotAuthorized",
+                        f"could not check authorization with polkit: {exc.message}",
+                    ),
+                )
+                return
+            authorized = bool(reply.unpack()[0][0])
+            if not authorized:
+                log(f"{sender} is not authorized to set '{profile}'")
+                self._fail(
+                    invocation,
+                    Refused(
+                        "NotAuthorized", "not authorized to change the power profile"
+                    ),
+                )
+                return
+            self.forwarder.submit(
+                profile,
+                lambda message: self._done(invocation, sender, profile, message),
+                lambda refused: self._refused(invocation, sender, profile, refused),
+            )
+
+        self.connection.call(
+            POLKIT_NAME,
+            POLKIT_PATH,
+            POLKIT_INTERFACE,
+            "CheckAuthorization",
+            args,
+            self.glib.VariantType("((bba{ss}))"),
+            self.gio.DBusCallFlags.NONE,
+            POLKIT_TIMEOUT_MS,
+            None,
+            checked,
+        )
+
+    def _done(
+        self, invocation: typing.Any, sender: str, profile: str, message: str
+    ) -> None:
+        log(f"{sender} set '{profile}': {message}")
+        invocation.return_value(self.glib.Variant("(s)", (message,)))
+
+    def _refused(
+        self, invocation: typing.Any, sender: str, profile: str, refused: Refused
+    ) -> None:
+        log(f"{sender} could not set '{profile}': {refused.message}")
+        self._fail(invocation, refused)
+
+
+def main() -> int:
+    import gi  # type: ignore[import-untyped, import-not-found, unused-ignore]
+
+    gi.require_version("Gio", "2.0")
+    gi.require_version("GLib", "2.0")
+    from gi.repository import (  # type: ignore[import-untyped, import-not-found, unused-ignore]
+        Gio,
+        GLib,
+    )
+
+    # Tests run against a private bus instead of the system bus.
+    address = os.environ.get("ELITEBOOK_DBUS_ADDRESS")
+    try:
+        if address:
+            connection = Gio.DBusConnection.new_for_address_sync(
+                address,
+                Gio.DBusConnectionFlags.AUTHENTICATION_CLIENT
+                | Gio.DBusConnectionFlags.MESSAGE_BUS_CONNECTION,
+                None,
+                None,
+            )
+        else:
+            connection = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
+    except GLib.Error as exc:
+        log(f"cannot connect to the bus: {exc.message}")
+        return 1
+
+    loop = GLib.MainLoop()
+    status = 0
+    service = Service(Gio, GLib, connection)
+    service.register()
+
+    def acquired(_connection: typing.Any, name: str) -> None:
+        log(f"serving {name}")
+
+    def lost(_connection: typing.Any, name: str) -> None:
+        nonlocal status
+        log(f"lost or could not own {name}")
+        status = 1
+        loop.quit()
+
+    owner = Gio.bus_own_name_on_connection(
+        connection, BUS_NAME, Gio.BusNameOwnerFlags.NONE, acquired, lost
+    )
+
+    def stop() -> bool:
+        loop.quit()
+        return False
+
+    GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGTERM, stop)
+    GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGINT, stop)
+    try:
+        loop.run()
+    finally:
+        Gio.bus_unown_name(owner)
+    return status
+
+
+if __name__ == "__main__":
+    sys.exit(main())

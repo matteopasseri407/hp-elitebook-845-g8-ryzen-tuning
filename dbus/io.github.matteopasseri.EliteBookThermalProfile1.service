@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+[D-BUS Service]
+Name=io.github.matteopasseri.EliteBookThermalProfile1
+# systemd starts the service; Exec is only a fallback for buses without it.
+Exec=/bin/false
+User=root
+SystemdService=elitebook-thermal-profile-dbus.service

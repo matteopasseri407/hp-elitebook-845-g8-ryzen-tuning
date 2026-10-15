@@ -79,14 +79,29 @@ jobs:
           test -f /usr/lib/systemd/system/elitebook-thermal-profile.service
           test -f /usr/lib/systemd/system/elitebook-power-guard.timer
 
+          echo "--- the D-Bus front end and its policy files ---"
+          dbus_name=io.github.matteopasseri.EliteBookThermalProfile1
+          test -x /usr/libexec/elitebook-thermal-profile-dbus
+          test -f /usr/lib/systemd/system/elitebook-thermal-profile-dbus.service
+          test -f "/usr/share/dbus-1/system.d/${dbus_name}.conf"
+          test -f "/usr/share/dbus-1/system-services/${dbus_name}.service"
+          test -f "/usr/share/polkit-1/actions/${dbus_name}.policy"
+          grep -q "^ExecStart=/usr/libexec/elitebook-thermal-profile-dbus$" \
+            /usr/lib/systemd/system/elitebook-thermal-profile-dbus.service
+          # Started on demand only: installing must not have started it.
+          if [ "$(systemctl is-active elitebook-thermal-profile-dbus.service 2>/dev/null || true)" = "active" ]; then
+            echo "the D-Bus front end must not be started by package installation" >&2
+            exit 1
+          fi
+
           echo "--- the hibernate preflight must not ship here ---"
           test ! -e /usr/bin/elitebook-hibernate-preflight
 
           echo "--- source-installer paths were rewritten ---"
           grep -q "/usr/bin/elitebook-thermal-profile" /usr/lib/systemd/system/elitebook-thermal-profile.service
-          if grep -rq "/usr/local/sbin" /usr/bin/elitebook-power-guard \
+          if grep -rqE "/usr/local/(sbin|libexec)" /usr/bin/elitebook-power-guard \
             /usr/lib/systemd/system/elitebook-*.service; then
-            echo "a /usr/local/sbin path survived packaging" >&2
+            echo "a /usr/local path survived packaging" >&2
             exit 1
           fi
 
@@ -142,6 +157,8 @@ jobs:
           echo "--- GNOME indicator package contents ---"
           dpkg -c dist/gnome-shell-extension-elitebook-thermal-profile_*.deb |
             grep -q "usr/share/gnome-shell/extensions/elitebook-thermal-profile@matteopasseri.github.io/extension.js"
+          dpkg -c dist/gnome-shell-extension-elitebook-thermal-profile_*.deb |
+            grep -q "usr/share/gnome-shell/extensions/elitebook-thermal-profile@matteopasseri.github.io/profileSwitcher.js"
 
           echo "--- the indicator points at the packaged dispatcher ---"
           # The extension calls the dispatcher by absolute path, so a missed
@@ -177,6 +194,9 @@ jobs:
           sudo apt-get purge -y elitebook-thermal-profile
           test ! -e /usr/bin/elitebook-thermal-profile
           test ! -e /usr/lib/systemd/system/elitebook-thermal-profile.service
+          test ! -e /usr/libexec/elitebook-thermal-profile-dbus
+          test ! -e /usr/share/polkit-1/actions/io.github.matteopasseri.EliteBookThermalProfile1.policy
+          test ! -e /usr/share/dbus-1/system.d/io.github.matteopasseri.EliteBookThermalProfile1.conf
 
       - uses: actions/upload-artifact@v4
         with:

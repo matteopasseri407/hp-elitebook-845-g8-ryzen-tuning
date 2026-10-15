@@ -217,3 +217,39 @@ busy and load levels that count as quiet or busy) and the values each stage
 asks for are in `IdleSettings` in `src/elitebook_profiles.py`. Each one has an
 `ELITEBOOK_`-prefixed variable with the same name. The defaults are the values
 the separate idle watcher used before it was merged into the service.
+
+## Who may switch profiles
+
+The GNOME indicator switches profiles through the D-Bus front end, and polkit
+decides who may: by default the person at the active local session may,
+without a password, and anyone else (SSH, an inactive session) needs an
+administrator. The command line is unaffected; it still needs root.
+
+To change that, add a rule rather than editing the shipped action file, so
+the change survives upgrades. For example, to always ask for an administrator
+password, remembered for a few minutes:
+
+```js
+// /etc/polkit-1/rules.d/50-elitebook-thermal-profile.rules
+polkit.addRule(function(action, subject) {
+    if (action.id == "io.github.matteopasseri.EliteBookThermalProfile1.set-profile") {
+        return polkit.Result.AUTH_ADMIN_KEEP;
+    }
+});
+```
+
+Or to let only members of one group switch without a password:
+
+```js
+// /etc/polkit-1/rules.d/50-elitebook-thermal-profile.rules
+polkit.addRule(function(action, subject) {
+    if (action.id == "io.github.matteopasseri.EliteBookThermalProfile1.set-profile") {
+        return subject.isInGroup("power") && subject.active && subject.local
+            ? polkit.Result.YES
+            : polkit.Result.AUTH_ADMIN;
+    }
+});
+```
+
+polkit picks up rule files without a restart. A refusal shows up in the
+indicator as a notification, not as a fallback to `pkexec`.
